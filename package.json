@@ -1,0 +1,26 @@
+{
+  "name": "debugscope",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/browser",
+    "packages/hub"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n hub,web -c cyan,blue \"npm run dev:hub\" \"npm run dev:browser\"",
+    "dev:hub": "npm run dev --workspace @debugscope/hub",
+    "dev:browser": "npm run dev --workspace @debugscope/browser",
+    "start": "npm run build && npm run start --workspace @debugscope/hub",
+    "build": "npm run build --workspace @debugscope/hub && npm run build --workspace @debugscope/browser",
+    "typecheck": "npm run typecheck --workspace @debugscope/hub && npm run typecheck --workspace @debugscope/browser",
+    "test:e2e": "npm run test:e2e --workspace @debugscope/browser",
+    "test:e2e:live": "playwright test --config playwright.live.config.ts",
+    "test:hub": "npm test --workspace @debugscope/hub",
+    "test:sdk": "python3 tools/sdk_smoke_test.py",
+    "verify": "npm run typecheck && npm run test:hub && npm run test:sdk && npm run test:e2e && npm run test:e2e:live && npm run build"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "concurrently": "^10.0.5"
+  }
+}

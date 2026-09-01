@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.16)
+project(debugscope_c VERSION 0.1.0 LANGUAGES C)
+
+add_library(debugscope STATIC debugscope.c)
+add_library(DebugScope::debugscope ALIAS debugscope)
+target_include_directories(debugscope PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}> $<INSTALL_INTERFACE:include>)
+target_compile_features(debugscope PUBLIC c_std_11)
+
+if(WIN32)
+  target_link_libraries(debugscope PUBLIC ws2_32)
+endif()
+
+option(DEBUGSCOPE_BUILD_EXAMPLE "Build the DebugScope C example" ON)
+if(DEBUGSCOPE_BUILD_EXAMPLE)
+  add_executable(debugscope_c_example example.c)
+  target_link_libraries(debugscope_c_example PRIVATE DebugScope::debugscope)
+  if(NOT WIN32)
+    target_link_libraries(debugscope_c_example PRIVATE m)
+  endif()
+endif()
+
+include(GNUInstallDirs)
+install(TARGETS debugscope EXPORT DebugScopeTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(FILES debugscope.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(EXPORT DebugScopeTargets NAMESPACE DebugScope:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/DebugScope)

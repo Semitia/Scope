@@ -1,0 +1,23 @@
+{
+  "name": "@debugscope/hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts --http-port 4713 --static ../../apps/browser/dist",
+    "build": "tsc --noEmit && tsup src/index.ts --format esm --platform node --target node24 --out-dir dist --clean",
+    "typecheck": "tsc --noEmit --pretty false",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "start": "node dist/index.js --http-port 4712 --static ../../apps/browser/dist"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}
