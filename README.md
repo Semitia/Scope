@@ -106,7 +106,11 @@ The name passed to `ds_init(...)`, `debugscope::Scope(...)`, or Python `Scope(..
 
 ## Browser controls
 
-- select a source and toggle channels in the left sidebar;
+- add and remove independent Scope panels; a new Scope starts empty so its channels can be chosen deliberately;
+- click a Scope to make it active, then toggle that Scope's channels in the left sidebar or use its channel picker;
+- keep a separate channel set and automatically calculated Y range for every Scope;
+- save the Scope layout per stable program identity across browser reloads;
+- select a source and browse its channels in the left sidebar;
 - delete stopped programs and their in-memory history;
 - customize each channel's color, smooth/linear/stepped curve, previewed solid/dashed/dotted/dash-dot stroke, and width;
 - use faithful point-to-point Linear curves by default; Smooth and Stepped remain per-channel options;
@@ -119,6 +123,8 @@ The name passed to `ds_init(...)`, `debugscope::Scope(...)`, or Python `Scope(..
 - hover for the selected-channel readout;
 - wheel to zoom X and drag to pan;
 - double-click the plot to return to the live tail.
+
+Multiple Scopes use a waveform-first vertical layout. One Scope fills the workspace; additional Scopes are stacked at a readable minimum height and the workspace scrolls when necessary. Freeform drag/resizing and other panel types are intentionally deferred until this basic panel model has been exercised in real debugging sessions.
 
 ### Timeline behavior
 

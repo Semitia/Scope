@@ -69,6 +69,8 @@ export function WaveformPlot({
   const autoYRef = useRef(autoY);
   const scrollWhenIdleRef = useRef(scrollWhenIdle);
   const getClockTimeRef = useRef(getClockTime);
+  const onVisiblePointCountRef = useRef(onVisiblePointCount);
+  const onRenderRateRef = useRef(onRenderRate);
   const latestTimeRef = useRef(0);
   const followingRef = useRef(true);
   const dragRef = useRef<{ startX: number; min: number; max: number } | null>(null);
@@ -87,6 +89,8 @@ export function WaveformPlot({
   autoYRef.current = autoY;
   scrollWhenIdleRef.current = scrollWhenIdle;
   getClockTimeRef.current = getClockTime;
+  onVisiblePointCountRef.current = onVisiblePointCount;
+  onRenderRateRef.current = onRenderRate;
 
   const channelSignature = channels
     .map((channel) => [
@@ -172,7 +176,7 @@ export function WaveformPlot({
       });
     }
 
-    onVisiblePointCount(visibleSamples * currentVisibleChannels.size);
+    onVisiblePointCountRef.current(visibleSamples * currentVisibleChannels.size);
     if (autoYRef.current && Number.isFinite(minY) && Number.isFinite(maxY)) {
       const rawRange = maxY - minY;
       const padding = Math.max(rawRange * 0.12, Math.abs(maxY) * 0.02, 0.01);
@@ -281,7 +285,7 @@ export function WaveformPlot({
           const now = performance.now();
           const elapsed = now - counter.since;
           if (elapsed >= 1_000) {
-            onRenderRate(Math.round((counter.count * 1_000) / elapsed));
+            onRenderRateRef.current(Math.round((counter.count * 1_000) / elapsed));
             counter.count = 0;
             counter.since = now;
           }
@@ -389,7 +393,7 @@ export function WaveformPlot({
       plot.destroy();
       plotRef.current = null;
     };
-  }, [channelSignature, onRenderRate]);
+  }, [channelSignature]);
 
   useEffect(() => {
     let animationFrame = 0;
@@ -430,7 +434,6 @@ export function WaveformPlot({
     data,
     dataVersion,
     getClockTime,
-    onVisiblePointCount,
     pausedAt,
     selectedChannel,
     visibleChannels,

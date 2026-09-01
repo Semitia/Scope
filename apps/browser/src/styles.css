@@ -325,6 +325,12 @@ select:focus-visible,
   white-space: nowrap;
 }
 
+.control-button:disabled,
+.scope-picker-bulk button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .control-button kbd {
   min-width: 31px;
   padding: 2px 5px;
@@ -756,6 +762,26 @@ select:focus-visible,
   letter-spacing: 0;
   border-radius: 4px;
   background: var(--bg-control);
+}
+
+.channel-heading-title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.channel-heading-title small {
+  overflow: hidden;
+  max-width: 105px;
+  padding: 2px 5px;
+  color: var(--accent);
+  font: inherit;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 4px;
+  background: var(--accent-soft);
 }
 
 .search-box {
@@ -1229,16 +1255,31 @@ select:focus-visible,
   grid-column: 2;
   grid-row: 2;
   padding: 12px;
-  overflow: hidden;
+  overflow: auto;
   background:
     radial-gradient(circle at 65% -20%, rgba(48, 93, 142, 0.08), transparent 36%),
     var(--bg-workspace);
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
 }
 
-.scope-panel {
+.scope-grid {
   display: grid;
   width: 100%;
   height: 100%;
+  min-height: 100%;
+  gap: 12px;
+}
+
+.scope-grid.single {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.scope-panel {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: auto;
   min-height: 0;
   grid-template-rows: 46px minmax(0, 1fr);
   overflow: hidden;
@@ -1246,6 +1287,19 @@ select:focus-visible,
   border-radius: 8px;
   background: var(--bg-panel);
   box-shadow: 0 12px 38px var(--shadow-color), inset 0 1px rgba(255, 255, 255, 0.12);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.scope-grid.single .scope-panel {
+  height: 100%;
+}
+
+.scope-panel.active {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border-subtle));
+  box-shadow:
+    0 12px 38px var(--shadow-color),
+    inset 0 1px rgba(255, 255, 255, 0.12),
+    0 0 0 1px color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 .scope-toolbar {
@@ -1343,16 +1397,288 @@ select:focus-visible,
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 5px;
-  padding: 7px 13px;
-  overflow: auto hidden;
+  gap: 7px;
+  padding: 7px 8px;
+  overflow: hidden;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel);
+}
+
+.scope-identity {
+  display: inline-flex;
+  height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 0 7px 0 5px;
+  color: var(--text-secondary);
+  border-right: 1px solid var(--border-subtle);
+  background: transparent;
+}
+
+.scope-identity > span {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-control);
+}
+
+.scope-identity strong {
+  font-size: 9px;
+  font-weight: 640;
+  white-space: nowrap;
+}
+
+.scope-panel.active .scope-identity strong,
+.scope-panel.active .scope-identity > span {
+  color: var(--accent);
+}
+
+.scope-legend-scroll {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 5px;
+  overflow: auto hidden;
   scrollbar-width: none;
 }
 
-.plot-legend::-webkit-scrollbar {
+.scope-legend-scroll::-webkit-scrollbar {
   display: none;
+}
+
+.legend-empty {
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.scope-panel-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  padding-left: 3px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.scope-action {
+  display: inline-flex;
+  height: 28px;
+  min-width: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 6px;
+  color: var(--text-muted);
+  border-radius: 5px;
+  background: transparent;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.scope-action span {
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+
+.scope-action:hover,
+.scope-action.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.scope-action.danger:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+
+.scope-picker-scrim {
+  position: absolute;
+  z-index: 11;
+  inset: 46px 0 0;
+  padding: 0;
+  cursor: default;
+  background: color-mix(in srgb, var(--bg-plot) 16%, transparent);
+  backdrop-filter: blur(0.6px);
+}
+
+.scope-channel-picker {
+  position: absolute;
+  z-index: 12;
+  top: 40px;
+  right: 8px;
+  display: flex;
+  width: min(292px, calc(100% - 16px));
+  max-height: calc(100% - 52px);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 97%, transparent);
+  box-shadow: 0 16px 42px var(--shadow-color);
+  backdrop-filter: blur(18px);
+}
+
+.scope-picker-header {
+  display: flex;
+  min-height: 48px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 9px 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.scope-picker-header > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.scope-picker-header strong {
+  font-size: 10.5px;
+  font-weight: 640;
+}
+
+.scope-picker-header small {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+}
+
+.scope-picker-header button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  color: var(--text-muted);
+  border-radius: 5px;
+  background: transparent;
+}
+
+.scope-picker-header button:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.scope-picker-bulk {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 5px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-control);
+}
+
+.scope-picker-bulk button {
+  height: 24px;
+  padding: 0 8px;
+  color: var(--text-secondary);
+  font-size: 8.5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-panel);
+}
+
+.scope-picker-bulk button:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-subtle));
+}
+
+.scope-picker-list {
+  display: grid;
+  min-height: 0;
+  gap: 2px;
+  padding: 6px;
+  overflow: hidden auto;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.scope-picker-channel {
+  display: grid;
+  min-height: 40px;
+  grid-template-columns: 25px 4px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.scope-picker-channel:hover,
+.scope-picker-channel[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: var(--bg-control);
+}
+
+.picker-check {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-input);
+}
+
+.picker-check.checked {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-subtle));
+  background: var(--accent-soft);
+}
+
+.picker-swatch {
+  width: 3px;
+  height: 23px;
+  border-radius: 2px;
+  background: var(--channel-color);
+}
+
+.picker-channel-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.picker-channel-copy strong,
+.picker-channel-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-channel-copy strong {
+  font-size: 9.5px;
+  font-weight: 570;
+}
+
+.picker-channel-copy small,
+.scope-picker-empty {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+}
+
+.scope-picker-empty {
+  padding: 18px 10px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .legend-item {
@@ -1663,6 +1989,7 @@ select:focus-visible,
 
   .app-context small,
   .demo-badge,
+  .add-scope-button > span,
   .control-button kbd {
     display: none;
   }
@@ -1788,6 +2115,10 @@ select:focus-visible,
     border-radius: 7px;
   }
 
+  .scope-grid {
+    gap: 7px;
+  }
+
   .scope-toolbar {
     padding: 0 8px 0 10px;
   }
@@ -1803,6 +2134,15 @@ select:focus-visible,
     padding-inline: 8px;
   }
 
+  .scope-picker-scrim {
+    inset-block-start: 43px;
+  }
+
+  .scope-channel-picker {
+    top: 37px;
+    max-height: calc(100% - 47px);
+  }
+
   .status-right,
   .status-group > span:nth-child(3) {
     display: none;
@@ -1815,6 +2155,11 @@ select:focus-visible,
   }
 
   .pause-button > span {
+    display: none;
+  }
+
+  .scope-identity strong,
+  .scope-action span {
     display: none;
   }
 

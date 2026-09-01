@@ -12,11 +12,13 @@ import {
   Palette,
   Pause,
   Play,
+  Plus,
   Radio,
   RotateCcw,
   Search,
   Server,
   Settings,
+  SlidersHorizontal,
   Sun,
   Trash2,
   WifiOff,
@@ -40,12 +42,23 @@ interface StoredChannelStyle {
 }
 
 const CHANNEL_STYLES_KEY = 'debugscope.channel-styles.v1';
+const SCOPE_LAYOUTS_KEY = 'debugscope.scope-layouts.v1';
 const THEME_KEY = 'debugscope.theme.v1';
 const SETTINGS_KEY = 'debugscope.settings.v1';
+const MAX_SCOPE_PANELS = 8;
 
 interface UserSettings {
   scrollWhenIdle: boolean;
 }
+
+interface ScopePanelDefinition {
+  id: string;
+  type: 'scope';
+  title: string;
+  channelKeys: string[];
+}
+
+type ScopeLayouts = Record<string, ScopePanelDefinition[]>;
 
 const NUMBER_FORMAT = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 1,
@@ -238,15 +251,60 @@ function initialSettings(): UserSettings {
   }
 }
 
+function initialScopeLayouts(): ScopeLayouts {
+  try {
+    const stored = JSON.parse(localStorage.getItem(SCOPE_LAYOUTS_KEY) ?? '{}') as unknown;
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
+
+    return Object.fromEntries(
+      Object.entries(stored as Record<string, unknown>)
+        .map(([programKey, value]) => {
+          if (!Array.isArray(value)) return [programKey, []] as const;
+          const panels = value
+            .filter((panel): panel is Record<string, unknown> => (
+              Boolean(panel) && typeof panel === 'object' && !Array.isArray(panel)
+            ))
+            .filter((panel) => (
+              panel.type === 'scope'
+              && typeof panel.id === 'string'
+              && typeof panel.title === 'string'
+              && Array.isArray(panel.channelKeys)
+            ))
+            .slice(0, MAX_SCOPE_PANELS)
+            .map((panel) => ({
+              id: panel.id as string,
+              type: 'scope' as const,
+              title: panel.title as string,
+              channelKeys: [...new Set(
+                (panel.channelKeys as unknown[]).filter((key): key is string => typeof key === 'string'),
+              )],
+            }));
+          return [programKey, panels] as const;
+        })
+        .filter(([, panels]) => panels.length > 0),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function createScopeId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `scope-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function nextScopeTitle(panels: ScopePanelDefinition[]): string {
+  const titles = new Set(panels.map((panel) => panel.title));
+  let number = 1;
+  while (titles.has(`Scope ${number}`)) number += 1;
+  return `Scope ${number}`;
+}
+
 export default function App() {
   const telemetry = useTelemetry();
   const rawChannels = telemetry.channels;
   const activeSource = telemetry.sources.find((source) => source.id === telemetry.activeSourceId);
   const channelIdentity = rawChannels.map((channel) => channel.id).join('|');
-  const knownChannelsRef = useRef<{ sourceId: number | null; ids: Set<string> }>({
-    sourceId: null,
-    ids: new Set(),
-  });
   const previousIdleScrollRef = useRef<boolean | null>(null);
 
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
@@ -255,16 +313,18 @@ export default function App() {
   const [channelStyles, setChannelStyles] = useState<Record<string, StoredChannelStyle>>(
     initialChannelStyles,
   );
+  const [scopeLayouts, setScopeLayouts] = useState<ScopeLayouts>(initialScopeLayouts);
+  const [activeScopeId, setActiveScopeId] = useState<string | null>(null);
+  const [channelPickerScopeId, setChannelPickerScopeId] = useState<string | null>(null);
   const [styleEditorChannelId, setStyleEditorChannelId] = useState<string | null>(null);
-  const [visibleChannels, setVisibleChannels] = useState<Set<string>>(() => new Set());
   const [selectedChannel, setSelectedChannel] = useState('');
   const [windowSeconds, setWindowSeconds] = useState(10);
   const [pausedAt, setPausedAt] = useState<number | null>(null);
   const [autoY, setAutoY] = useState(true);
   const [channelSearch, setChannelSearch] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [visiblePointCount, setVisiblePointCount] = useState(0);
-  const [renderRate, setRenderRate] = useState(0);
+  const [visiblePointCounts, setVisiblePointCounts] = useState<Record<string, number>>({});
+  const [renderRates, setRenderRates] = useState<Record<string, number>>({});
 
   const sourceKeys = useMemo(
     () => new Map(telemetry.sources.map((source) => [source.id, source.programKey])),
@@ -281,6 +341,22 @@ export default function App() {
     })),
     [channelStyles, rawChannels, styleKeyFor],
   );
+  const layoutKey = activeSource?.programKey ?? null;
+  const defaultScope = useMemo<ScopePanelDefinition>(() => ({
+    id: `scope-default:${layoutKey ?? 'waiting'}`,
+    type: 'scope',
+    title: 'Scope 1',
+    channelKeys: channels.slice(0, 4).map((channel) => channel.key),
+  }), [channelIdentity, layoutKey]);
+  const scopePanels = useMemo(() => {
+    const stored = layoutKey ? scopeLayouts[layoutKey] : undefined;
+    return stored?.length ? stored : [defaultScope];
+  }, [defaultScope, layoutKey, scopeLayouts]);
+  const activeScope = scopePanels.find((panel) => panel.id === activeScopeId) ?? scopePanels[0];
+  const activeScopeChannelIds = useMemo(() => {
+    const keys = new Set(activeScope?.channelKeys ?? []);
+    return new Set(channels.filter((channel) => keys.has(channel.key)).map((channel) => channel.id));
+  }, [activeScope, channels]);
   const styleEditorChannel = channels.find((channel) => channel.id === styleEditorChannelId);
   const paused = pausedAt !== null;
   const timeline = useMemo(
@@ -310,6 +386,10 @@ export default function App() {
   }, [settings]);
 
   useEffect(() => {
+    localStorage.setItem(SCOPE_LAYOUTS_KEY, JSON.stringify(scopeLayouts));
+  }, [scopeLayouts]);
+
+  useEffect(() => {
     if (!settingsOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setSettingsOpen(false);
@@ -320,34 +400,38 @@ export default function App() {
 
   useEffect(() => {
     const nextIds = new Set(channels.map((channel) => channel.id));
-    const previous = knownChannelsRef.current;
-    const sourceChanged = previous.sourceId !== telemetry.activeSourceId;
-
-    setVisibleChannels((current) => {
-      const next = new Set([...current].filter((id) => nextIds.has(id)));
-      if (sourceChanged) {
-        channels.slice(0, 4).forEach((channel) => next.add(channel.id));
-      } else {
-        const availableAutoSlots = Math.max(0, 4 - previous.ids.size);
-        channels
-          .filter((channel) => !previous.ids.has(channel.id))
-          .slice(0, availableAutoSlots)
-          .forEach((channel) => next.add(channel.id));
-      }
-      return next;
-    });
-
     setSelectedChannel((current) =>
       nextIds.has(current) ? current : (channels[0]?.id ?? ''),
     );
     setStyleEditorChannelId((current) => current && nextIds.has(current) ? current : null);
-    knownChannelsRef.current = { sourceId: telemetry.activeSourceId, ids: nextIds };
   }, [channelIdentity, telemetry.activeSourceId]);
+
+  useEffect(() => {
+    const nextActiveScope = scopePanels.find((panel) => panel.id === activeScopeId) ?? scopePanels[0];
+    if (nextActiveScope && nextActiveScope.id !== activeScopeId) {
+      setActiveScopeId(nextActiveScope.id);
+    }
+    if (
+      channelPickerScopeId
+      && !scopePanels.some((panel) => panel.id === channelPickerScopeId)
+    ) {
+      setChannelPickerScopeId(null);
+    }
+  }, [activeScopeId, channelPickerScopeId, scopePanels]);
+
+  useEffect(() => {
+    const selected = channels.find((channel) => channel.id === selectedChannel);
+    if (selected && activeScopeChannelIds.has(selected.id)) return;
+    const firstVisible = channels.find((channel) => activeScopeChannelIds.has(channel.id));
+    setSelectedChannel(firstVisible?.id ?? channels[0]?.id ?? '');
+  }, [activeScopeChannelIds, channels, selectedChannel]);
 
   useEffect(() => {
     setPausedAt(null);
     setChannelSearch('');
     setStyleEditorChannelId(null);
+    setActiveScopeId(null);
+    setChannelPickerScopeId(null);
   }, [telemetry.activeSourceId]);
 
   const getViewTime = useCallback(
@@ -402,14 +486,73 @@ export default function App() {
     [channels],
   );
 
-  const toggleChannel = (channelId: string) => {
-    setVisibleChannels((current) => {
-      const next = new Set(current);
-      if (next.has(channelId)) next.delete(channelId);
-      else next.add(channelId);
+  const updateScopePanels = useCallback((
+    updater: (panels: ScopePanelDefinition[]) => ScopePanelDefinition[],
+  ) => {
+    if (!layoutKey) return;
+    setScopeLayouts((current) => {
+      const base = current[layoutKey]?.length ? current[layoutKey] : [defaultScope];
+      return { ...current, [layoutKey]: updater(base) };
+    });
+  }, [defaultScope, layoutKey]);
+
+  const setScopeChannelKeys = useCallback((scopeId: string, channelKeys: string[]) => {
+    updateScopePanels((panels) => panels.map((panel) => panel.id === scopeId
+      ? { ...panel, channelKeys: [...new Set(channelKeys)] }
+      : panel));
+  }, [updateScopePanels]);
+
+  const toggleScopeChannel = useCallback((scopeId: string, channelKey: string) => {
+    updateScopePanels((panels) => panels.map((panel) => {
+      if (panel.id !== scopeId) return panel;
+      const channelKeys = new Set(panel.channelKeys);
+      if (channelKeys.has(channelKey)) channelKeys.delete(channelKey);
+      else channelKeys.add(channelKey);
+      return { ...panel, channelKeys: [...channelKeys] };
+    }));
+  }, [updateScopePanels]);
+
+  const addScope = () => {
+    if (!layoutKey || scopePanels.length >= MAX_SCOPE_PANELS) return;
+    const panel: ScopePanelDefinition = {
+      id: createScopeId(),
+      type: 'scope',
+      title: nextScopeTitle(scopePanels),
+      channelKeys: [],
+    };
+    updateScopePanels((panels) => [...panels, panel]);
+    setActiveScopeId(panel.id);
+    setChannelPickerScopeId(panel.id);
+  };
+
+  const deleteScope = (scopeId: string) => {
+    if (scopePanels.length <= 1) return;
+    const remaining = scopePanels.filter((panel) => panel.id !== scopeId);
+    updateScopePanels(() => remaining);
+    setVisiblePointCounts((current) => {
+      const next = { ...current };
+      delete next[scopeId];
       return next;
     });
+    setRenderRates((current) => {
+      const next = { ...current };
+      delete next[scopeId];
+      return next;
+    });
+    if (activeScopeId === scopeId) setActiveScopeId(remaining[0]?.id ?? null);
+    if (channelPickerScopeId === scopeId) setChannelPickerScopeId(null);
   };
+
+  const visiblePointCount = scopePanels.reduce(
+    (total, panel) => total + (visiblePointCounts[panel.id] ?? 0),
+    0,
+  );
+  const currentRenderRates = scopePanels
+    .map((panel) => renderRates[panel.id] ?? 0)
+    .filter((rate) => rate > 0);
+  const renderRate = currentRenderRates.length > 0
+    ? Math.round(currentRenderRates.reduce((total, rate) => total + rate, 0) / currentRenderRates.length)
+    : 0;
 
   const clearHistory = () => {
     telemetry.clear();
@@ -504,6 +647,20 @@ export default function App() {
             <span className="live-dot" />
             {connectionLabel}
           </span>
+
+          <button
+            className="control-button add-scope-button"
+            type="button"
+            onClick={addScope}
+            disabled={!layoutKey || scopePanels.length >= MAX_SCOPE_PANELS}
+            aria-label="Add scope"
+            title={scopePanels.length >= MAX_SCOPE_PANELS
+              ? `Up to ${MAX_SCOPE_PANELS} scopes are supported`
+              : 'Add an independent waveform panel'}
+          >
+            <Plus size={14} />
+            <span>Add scope</span>
+          </button>
 
           <button
             className={`control-button auto-y-button${autoY ? ' active' : ''}`}
@@ -632,8 +789,11 @@ export default function App() {
 
         <section className="sidebar-section channels-section">
           <div className="section-heading channel-heading">
-            <span>CHANNELS</span>
-            <span className="channel-count">{visibleChannels.size} / {channels.length}</span>
+            <span className="channel-heading-title">
+              CHANNELS
+              <small>{activeScope?.title ?? 'Scope'}</small>
+            </span>
+            <span className="channel-count">{activeScopeChannelIds.size} / {channels.length}</span>
           </div>
 
           <label className="search-box">
@@ -663,7 +823,7 @@ export default function App() {
               <div className="channel-list">
                 {groupChannels.map((channel) => {
                   const channelIndex = channelIndexes.get(channel.id) ?? -1;
-                  const visible = visibleChannels.has(channel.id);
+                  const visible = activeScopeChannelIds.has(channel.id);
                   const selected = selectedChannel === channel.id;
 
                   return (
@@ -682,7 +842,7 @@ export default function App() {
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
-                          toggleChannel(channel.id);
+                          if (activeScope) toggleScopeChannel(activeScope.id, channel.key);
                         }}
                         aria-label={`${visible ? 'Hide' : 'Show'} ${channel.label}`}
                         aria-pressed={visible}
@@ -817,53 +977,209 @@ export default function App() {
       />
 
       <main className="workspace">
-        <section className="scope-panel" aria-label="Live signals">
-          <div className="plot-legend" aria-label="Channel legend">
-            {channels.filter((channel) => visibleChannels.has(channel.id)).map((channel) => {
-              const channelIndex = channelIndexes.get(channel.id) ?? -1;
-              const selected = channel.id === selectedChannel;
-              return (
-                <button
-                  className={`legend-item${selected ? ' selected' : ''}`}
-                  type="button"
-                  key={channel.id}
-                  onClick={() => setSelectedChannel(channel.id)}
-                >
-                  <span
-                    className={`legend-line ${channel.linePattern}`}
-                    style={{
-                      '--channel-color': channel.color,
-                      '--channel-width': `${channel.lineWidth}px`,
-                    } as React.CSSProperties}
-                  />
-                  <span>{channel.label}</span>
-                  <b>{formatValue(telemetry.latest[channelIndex] ?? channel.lastValue ?? 0)}</b>
-                  {(channel.unit || channel.valueType) && <small>{channel.unit || channel.valueType}</small>}
-                </button>
-              );
-            })}
-          </div>
+        <div
+          className={`scope-grid${scopePanels.length === 1 ? ' single' : ''}`}
+          style={scopePanels.length > 1
+            ? { gridTemplateRows: `repeat(${scopePanels.length}, minmax(300px, 1fr))` }
+            : undefined}
+        >
+          {scopePanels.map((panel, panelIndex) => {
+            const panelChannelKeys = new Set(panel.channelKeys);
+            const panelVisibleChannels = new Set(
+              channels
+                .filter((channel) => panelChannelKeys.has(channel.key))
+                .map((channel) => channel.id),
+            );
+            const panelIsActive = panel.id === activeScope?.id;
+            const pickerOpen = panel.id === channelPickerScopeId;
 
-          <WaveformPlot
-            channels={channels}
-            data={timeline.data}
-            dataVersion={telemetry.version}
-            visibleChannels={visibleChannels}
-            selectedChannel={selectedChannel}
-            windowSeconds={windowSeconds}
-            pausedAt={pausedAt}
-            autoY={autoY}
-            theme={theme}
-            scrollWhenIdle={settings.scrollWhenIdle}
-            getClockTime={getViewTime}
-            onShowAllChannels={() => setVisibleChannels(new Set(channels.map((channel) => channel.id)))}
-            onVisiblePointCount={setVisiblePointCount}
-            onRenderRate={setRenderRate}
-            emptyTitle={emptyTitle}
-            emptyMessage={emptyMessage}
-            showEmptyAction={channels.length > 0}
-          />
-        </section>
+            return (
+              <section
+                className={`scope-panel${panelIsActive ? ' active' : ''}`}
+                aria-label={panel.title}
+                key={panel.id}
+                onPointerDown={() => setActiveScopeId(panel.id)}
+              >
+                <div className="plot-legend">
+                  <button
+                    className="scope-identity"
+                    type="button"
+                    onClick={() => setActiveScopeId(panel.id)}
+                    aria-label={`Activate ${panel.title}`}
+                    aria-pressed={panelIsActive}
+                  >
+                    <span>{String(panelIndex + 1).padStart(2, '0')}</span>
+                    <strong>{panel.title}</strong>
+                  </button>
+
+                  <div className="scope-legend-scroll" aria-label={`${panel.title} channel legend`}>
+                    {channels.filter((channel) => panelVisibleChannels.has(channel.id)).map((channel) => {
+                      const channelIndex = channelIndexes.get(channel.id) ?? -1;
+                      const selected = panelIsActive && channel.id === selectedChannel;
+                      return (
+                        <button
+                          className={`legend-item${selected ? ' selected' : ''}`}
+                          type="button"
+                          key={channel.id}
+                          onClick={() => {
+                            setActiveScopeId(panel.id);
+                            setSelectedChannel(channel.id);
+                          }}
+                        >
+                          <span
+                            className={`legend-line ${channel.linePattern}`}
+                            style={{
+                              '--channel-color': channel.color,
+                              '--channel-width': `${channel.lineWidth}px`,
+                            } as React.CSSProperties}
+                          />
+                          <span>{channel.label}</span>
+                          <b>{formatValue(telemetry.latest[channelIndex] ?? channel.lastValue ?? 0)}</b>
+                          {(channel.unit || channel.valueType) && <small>{channel.unit || channel.valueType}</small>}
+                        </button>
+                      );
+                    })}
+                    {panelVisibleChannels.size === 0 && (
+                      <span className="legend-empty">No channels selected</span>
+                    )}
+                  </div>
+
+                  <div className="scope-panel-actions">
+                    <button
+                      className={`scope-action${pickerOpen ? ' active' : ''}`}
+                      type="button"
+                      onClick={() => setChannelPickerScopeId((current) => current === panel.id ? null : panel.id)}
+                      aria-label={`Choose channels for ${panel.title}`}
+                      aria-haspopup="dialog"
+                      aria-expanded={pickerOpen}
+                      title="Choose channels"
+                    >
+                      <SlidersHorizontal size={14} />
+                      <span>{panelVisibleChannels.size}</span>
+                    </button>
+                    {scopePanels.length > 1 && (
+                      <button
+                        className="scope-action danger"
+                        type="button"
+                        onClick={() => deleteScope(panel.id)}
+                        aria-label={`Delete ${panel.title}`}
+                        title={`Delete ${panel.title}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <WaveformPlot
+                  channels={channels}
+                  data={timeline.data}
+                  dataVersion={telemetry.version}
+                  visibleChannels={panelVisibleChannels}
+                  selectedChannel={panelIsActive ? selectedChannel : ''}
+                  windowSeconds={windowSeconds}
+                  pausedAt={pausedAt}
+                  autoY={autoY}
+                  theme={theme}
+                  scrollWhenIdle={settings.scrollWhenIdle}
+                  getClockTime={getViewTime}
+                  onShowAllChannels={() => setScopeChannelKeys(
+                    panel.id,
+                    channels.map((channel) => channel.key),
+                  )}
+                  onVisiblePointCount={(count) => setVisiblePointCounts((current) => (
+                    current[panel.id] === count ? current : { ...current, [panel.id]: count }
+                  ))}
+                  onRenderRate={(rate) => setRenderRates((current) => (
+                    current[panel.id] === rate ? current : { ...current, [panel.id]: rate }
+                  ))}
+                  emptyTitle={channels.length > 0 ? `No channels in ${panel.title}` : emptyTitle}
+                  emptyMessage={channels.length > 0
+                    ? 'Choose the signals this scope should display. Each scope keeps an independent Y range.'
+                    : emptyMessage}
+                  showEmptyAction={channels.length > 0}
+                />
+
+                {pickerOpen && (
+                  <>
+                    <button
+                      className="scope-picker-scrim"
+                      type="button"
+                      onClick={() => setChannelPickerScopeId(null)}
+                      aria-label={`Close channel picker for ${panel.title}`}
+                    />
+                    <div className="scope-channel-picker" role="dialog" aria-label={`Channels for ${panel.title}`}>
+                      <div className="scope-picker-header">
+                        <span>
+                          <strong>{panel.title}</strong>
+                          <small>{panelVisibleChannels.size} of {channels.length} channels</small>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setChannelPickerScopeId(null)}
+                          aria-label={`Close channels for ${panel.title}`}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+
+                      <div className="scope-picker-bulk">
+                        <button
+                          type="button"
+                          onClick={() => setScopeChannelKeys(
+                            panel.id,
+                            channels.map((channel) => channel.key),
+                          )}
+                          disabled={channels.length === 0}
+                        >
+                          Select all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setScopeChannelKeys(panel.id, [])}
+                          disabled={panelVisibleChannels.size === 0}
+                        >
+                          Clear
+                        </button>
+                      </div>
+
+                      <div className="scope-picker-list">
+                        {channels.map((channel) => {
+                          const checked = panelChannelKeys.has(channel.key);
+                          return (
+                            <button
+                              className="scope-picker-channel"
+                              type="button"
+                              role="checkbox"
+                              aria-checked={checked}
+                              key={channel.id}
+                              onClick={() => toggleScopeChannel(panel.id, channel.key)}
+                            >
+                              <span className={`picker-check${checked ? ' checked' : ''}`}>
+                                {checked ? <Eye size={12} /> : <EyeOff size={12} />}
+                              </span>
+                              <span
+                                className="picker-swatch"
+                                style={{ '--channel-color': channel.color } as React.CSSProperties}
+                              />
+                              <span className="picker-channel-copy">
+                                <strong>{channel.label}</strong>
+                                <small>{channel.key}</small>
+                              </span>
+                            </button>
+                          );
+                        })}
+                        {channels.length === 0 && (
+                          <span className="scope-picker-empty">Channels will appear after the first sample.</span>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </section>
+            );
+          })}
+        </div>
       </main>
 
       <footer className="status-bar">

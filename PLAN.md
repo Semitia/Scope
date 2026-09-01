@@ -17,14 +17,14 @@ The repository now contains the complete browser-first vertical slice that this 
 - a local TypeScript Hub with source/channel discovery, bounded recent history, memory limits, WebSocket snapshots/deltas, and static browser serving;
 - stable program identity based on the producer name, with PID retained only as current-run metadata;
 - independent C and C++ SDKs plus Python, Rust, and MATLAB SDKs;
-- a responsive light/dark browser workbench with source deletion, channel visibility, Auto Y, zoom/pan, pause/clear, cursor readout, channel colors and line styles, and persistent settings;
+- a responsive light/dark browser workbench with source deletion, multiple independent Scope panels, per-Scope channel binding and Y ranges, Auto Y, zoom/pan, pause/clear, cursor readout, channel colors and line styles, and persistent per-program layouts/settings;
 - sample-time and real-time timeline modes, including disconnected blank regions across real input gaps;
 - Hub, protocol, SDK compatibility, browser interaction, timeline, and live end-to-end tests.
 
 Still deferred:
 
 - the optional VS Code Bottom Panel companion;
-- multiple independent scope panes, record/replay, export, advanced cursors, and additional plot types;
+- freeform/resizable panel layout, record/replay, export, advanced cursors, and additional plot types;
 - automated MATLAB runtime coverage and a broader cross-platform CI matrix;
 - public package publishing and formal v0.1 release packaging.
 
@@ -1357,6 +1357,12 @@ Later:
 - measurements;
 - session record/replay.
 
+## 42.0 Implemented panel baseline
+
+The browser now uses a minimal extensible panel model. A workspace may contain up to eight independently rendered Scope panels. Each Scope owns a stable ID, title, and channel-key set; the layout is saved under the producer's stable program identity, so restarting a process does not create or select a new layout.
+
+The current layout is intentionally constrained to a vertical stack. A single Scope fills the available workspace, while multiple Scopes keep a readable minimum height and scroll as needed. The active Scope is visually identified, the sidebar edits only that Scope, and every Scope also exposes a local channel picker. Other widget types, drag/drop placement, resizing, renaming, and arbitrary grids remain later refinements rather than prerequisites for validating the data-binding model.
+
 ## 42.1 Product quality bar
 
 Visual quality is a product requirement, not a final polish task.
@@ -1484,7 +1490,7 @@ The channel browser should support real debugging workloads:
 - search/filter for channel name;
 - color swatch, visibility, live value, and unit in a compact row;
 - selected, hidden, stale, and disconnected states that are distinguishable without relying only on color;
-- drag or explicit action to add a channel to a scope once multiple scopes exist;
+- explicit picker or active-scope sidebar action to add a channel to a Scope;
 - stable channel colors across reconnects and browser reloads.
 
 Do not auto-enable hundreds of channels. Preserve the suggested first-four behavior and make bulk enable/disable easy.
@@ -2341,7 +2347,7 @@ Test at least several currently supported versions.
 
 Likely additions:
 
-- multiple scopes;
+- resizable/reorderable Scope panels and saved grid layouts;
 - improved channel grouping;
 - explicit numeric Y-range controls;
 - channel rename/alias;

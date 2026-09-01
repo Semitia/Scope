@@ -9,7 +9,7 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?demo=1');
 
-  await expect(page.getByRole('region', { name: 'Live signals' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Scope 1' })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await expect(page.locator('.scope-toolbar')).toHaveCount(0);
   await expect(page.locator('.source-card strong').getByText('control-loop', { exact: true })).toBeVisible();
@@ -38,6 +38,26 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await idleScrollSwitch.click();
   await page.keyboard.press('Escape');
   await expect(settingsPanel).toBeHidden();
+
+  await page.getByRole('button', { name: 'Add scope' }).click();
+  const scopeTwoPicker = page.getByRole('dialog', { name: 'Channels for Scope 2' });
+  await expect(scopeTwoPicker).toBeVisible();
+  await scopeTwoPicker.getByRole('checkbox').filter({ hasText: 'Target' }).click();
+  await scopeTwoPicker.getByRole('checkbox').filter({ hasText: 'Error' }).click();
+  await page.screenshot({ path: '../../artifacts/debugscope-scope-picker.png', fullPage: true });
+  await page.getByRole('button', { name: 'Close channels for Scope 2' }).click();
+  await expect(page.locator('.scope-panel')).toHaveCount(2);
+  await expect(page.getByRole('region', { name: 'Scope 2' }).locator('.legend-item')).toHaveCount(2);
+  await expect(page.locator('.channel-heading .channel-count')).toHaveText('2 / 4');
+  await page.screenshot({ path: '../../artifacts/debugscope-multiple-scopes.png', fullPage: true });
+
+  await page.reload();
+  await expect(page.locator('.scope-panel')).toHaveCount(2);
+  await expect(page.getByRole('region', { name: 'Scope 2' }).locator('.legend-item')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Activate Scope 1' }).click();
+  await expect(page.locator('.channel-heading .channel-count')).toHaveText('4 / 4');
+  await page.getByRole('button', { name: 'Delete Scope 2' }).click();
+  await expect(page.locator('.scope-panel')).toHaveCount(1);
 
   await page.getByRole('button', { name: /Pause/ }).click();
   await expect(page.getByText('PAUSED')).toBeVisible();
@@ -100,7 +120,7 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   for (const channel of ['Target', 'Speed', 'Estimate']) {
     await page.getByRole('button', { name: `Hide ${channel}`, exact: true }).click();
   }
-  await expect(page.getByText('No visible channels')).toBeVisible();
+  await expect(page.getByText('No channels in Scope 1')).toBeVisible();
   await page.getByRole('button', { name: 'Show all channels' }).click();
   await expect(page.locator('.channel-heading .channel-count')).toHaveText('4 / 4');
 
