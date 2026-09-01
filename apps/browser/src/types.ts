@@ -20,6 +20,9 @@ export interface ChannelDefinition {
 
 export interface SourceDefinition {
   id: number;
+  remoteId?: number;
+  hubId?: string;
+  hubAddress?: string;
   name: string;
   programKey: string;
   processId?: number;
@@ -28,6 +31,13 @@ export interface SourceDefinition {
   receivedPackets: number;
   missingPackets: number;
   channelCount: number;
+}
+
+export interface HubDefinition {
+  id: string;
+  address: string;
+  connection: ConnectionState;
+  removable: boolean;
 }
 
 export type TelemetryData = [number[], ...Array<Array<number | null | undefined>>];
@@ -50,6 +60,9 @@ export interface TelemetryController {
   now: () => number;
   clear: () => void;
   deleteSource: (sourceId: number) => void;
+  hubs: HubDefinition[];
+  addHub: (address: string) => boolean;
+  removeHub: (hubId: string) => void;
 }
 
 export const TRACE_COLORS = [

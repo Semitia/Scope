@@ -11,5 +11,5 @@ int main()
     frame("target", 151.25);
     frame("ticks", 9000000000ull);
     frame.send();
-    debugscope::Scope::shutdown();
+    scope.close();
 }

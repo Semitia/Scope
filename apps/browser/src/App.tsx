@@ -323,6 +323,9 @@ export default function App() {
   const [autoY, setAutoY] = useState(true);
   const [channelSearch, setChannelSearch] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [hubEditorOpen, setHubEditorOpen] = useState(false);
+  const [hubAddress, setHubAddress] = useState('');
+  const [hubAddressError, setHubAddressError] = useState('');
   const [visiblePointCounts, setVisiblePointCounts] = useState<Record<string, number>>({});
   const [renderRates, setRenderRates] = useState<Record<string, number>>({});
 
@@ -559,6 +562,16 @@ export default function App() {
     if (paused) setPausedAt(getViewTime());
   };
 
+  const addHub = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!telemetry.addHub(hubAddress)) {
+      setHubAddressError('Enter a new Hub address, for example 192.168.1.20:4713');
+      return;
+    }
+    setHubAddress('');
+    setHubAddressError('');
+  };
+
   const updateChannelStyle = (
     channel: ChannelDefinition,
     patch: Partial<StoredChannelStyle>,
@@ -731,8 +744,66 @@ export default function App() {
         <section className="sidebar-section source-section">
           <div className="section-heading">
             <span>PROGRAMS</span>
-            <span className="channel-count">{telemetry.sources.length}</span>
+            <span className="section-heading-actions">
+              <span className="channel-count">{telemetry.sources.length}</span>
+              {telemetry.mode === 'live' && (
+                <button
+                  className={`section-add-button${hubEditorOpen ? ' active' : ''}`}
+                  type="button"
+                  onClick={() => {
+                    setHubEditorOpen((open) => !open);
+                    setHubAddressError('');
+                  }}
+                  aria-label="Add Hub address"
+                  aria-expanded={hubEditorOpen}
+                  title="Connect to another DebugScope Hub"
+                >
+                  <Plus size={13} />
+                </button>
+              )}
+            </span>
           </div>
+
+          {hubEditorOpen && telemetry.mode === 'live' && (
+            <div className="hub-editor">
+              <form className="hub-address-form" onSubmit={addHub}>
+                <label htmlFor="hub-address">Hub address</label>
+                <div>
+                  <input
+                    id="hub-address"
+                    type="text"
+                    value={hubAddress}
+                    onChange={(event) => {
+                      setHubAddress(event.target.value);
+                      setHubAddressError('');
+                    }}
+                    placeholder="192.168.1.20:4713"
+                    aria-invalid={Boolean(hubAddressError)}
+                    autoFocus
+                  />
+                  <button type="submit" disabled={!hubAddress.trim()}>Add</button>
+                </div>
+                {hubAddressError && <small role="alert">{hubAddressError}</small>}
+              </form>
+              <div className="hub-list" aria-label="Configured Hub addresses">
+                {telemetry.hubs.map((hub) => (
+                  <div className="hub-row" key={hub.id}>
+                    <i className={`connection-dot tiny${hub.connection === 'connected' ? '' : ' stale'}`} />
+                    <span title={hub.address}>{hub.address.replace(/^wss?:\/\//, '')}</span>
+                    {hub.removable && (
+                      <button
+                        type="button"
+                        onClick={() => telemetry.removeHub(hub.id)}
+                        aria-label={`Remove Hub ${hub.address}`}
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="source-list">
             {telemetry.sources.map((source) => (
@@ -754,6 +825,9 @@ export default function App() {
                     <small>
                       {source.sdkName ?? 'Unknown SDK'}
                       {source.processId !== undefined ? ` · PID ${source.processId}` : ''}
+                      {telemetry.hubs.length > 1 && source.hubAddress
+                        ? ` · ${source.hubAddress.replace(/^wss?:\/\//, '').replace(/\/api\/ws$/, '')}`
+                        : ''}
                     </small>
                   </span>
                   <span
@@ -1194,7 +1268,10 @@ export default function App() {
           <span><b>{visiblePointCount.toLocaleString()}</b> points visible</span>
         </div>
         <div className="status-group status-right">
-          <span>UDP <b>127.0.0.1:4711</b></span>
+          <span>
+            Hub <b>{(activeSource?.hubAddress ?? telemetry.hubs[0]?.address ?? '—')
+              .replace(/^wss?:\/\//, '').replace(/\/api\/ws$/, '')}</b>
+          </span>
           <span>Render <b>{renderRate || '—'} fps</b></span>
           <span>Memory <b>{formatBytes(telemetry.memoryBytes)}</b></span>
           <Gauge size={13} />

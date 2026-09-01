@@ -47,7 +47,9 @@ python sdk/python/example.py
 ```
 
 ```python
-from debugscope import scope
+from debugscope import Scope
+
+scope = Scope("controller")
 
 scope("motor.speed", speed)
 scope.frame({
@@ -102,7 +104,12 @@ python3 tools/dscp_receiver.py
 
 Endpoint overrides are available through `DEBUGSCOPE_UDP_HOST` and `DEBUGSCOPE_UDP_PORT`.
 
-The name passed to `ds_init(...)`, `debugscope::Scope(...)`, or Python `Scope(...)` is the stable program identity. Re-running a program with the same name updates the existing source instead of creating another sidebar entry; PID is shown only as current-run information. Use different names when simultaneous instances must stay separate.
+Every SDK requires an explicit, non-empty source name. The name passed to
+`ds_init(...)`, `debugscope::Scope(...)`, Rust/MATLAB/Python `Scope(...)` is the
+stable program identity. Re-running a program with the same name updates the
+existing source instead of creating another sidebar entry; PID is shown only as
+current-run information. Use different names when simultaneous instances must
+stay separate.
 
 ## Browser controls
 
@@ -111,6 +118,7 @@ The name passed to `ds_init(...)`, `debugscope::Scope(...)`, or Python `Scope(..
 - keep a separate channel set and automatically calculated Y range for every Scope;
 - save the Scope layout per stable program identity across browser reloads;
 - select a source and browse its channels in the left sidebar;
+- add remote Hub addresses manually and browse programs from multiple Hubs in one workbench;
 - delete stopped programs and their in-memory history;
 - customize each channel's color, smooth/linear/stepped curve, previewed solid/dashed/dotted/dash-dot stroke, and width;
 - use faithful point-to-point Linear curves by default; Smooth and Stepped remain per-channel options;
@@ -123,6 +131,11 @@ The name passed to `ds_init(...)`, `debugscope::Scope(...)`, or Python `Scope(..
 - hover for the selected-channel readout;
 - wheel to zoom X and drag to pan;
 - double-click the plot to return to the live tail.
+
+Use the `+` button beside **PROGRAMS** to add another Hub. Addresses such as
+`192.168.1.20:4713`, `http://192.168.1.20:4713`, and a complete WebSocket URL
+are accepted and saved in the browser. The Browser connects to the Hub's
+WebSocket endpoint; UDP producers still send to that Hub's UDP address and port.
 
 Multiple Scopes use a waveform-first vertical layout. One Scope fills the workspace; additional Scopes are stacked at a readable minimum height and the workspace scrolls when necessary. Freeform drag/resizing and other panel types are intentionally deferred until this basic panel model has been exercised in real debugging sessions.
 

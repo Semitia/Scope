@@ -9,7 +9,9 @@ python -m pip install ./sdk/python
 Send scalar values:
 
 ```python
-from debugscope import scope
+from debugscope import Scope
+
+scope = Scope("training")
 
 scope("loss", loss)
 scope("accuracy", accuracy)
@@ -25,7 +27,8 @@ scope.frame({
 })
 ```
 
-The convenience instance opens its socket lazily. Importing the package does not start a thread or open a connection.
+Every producer has an explicit, required name. Constructing it does not start a
+thread; its UDP socket opens lazily on the first send.
 
 Explicit typed methods are available when the wire type matters:
 
@@ -35,7 +38,7 @@ scope.i32("state", state)
 scope.u64("ticks", ticks)
 ```
 
-Create an isolated producer or change the endpoint in code:
+Change the optional endpoint in code when the Hub is not local:
 
 ```python
 from debugscope import Scope
@@ -43,6 +46,8 @@ from debugscope import Scope
 scope = Scope("training", host="127.0.0.1", port=4711)
 ```
 
-An explicit `Scope` name is the stable program identity used by the Hub. Repeated runs with the same name reuse one program entry; use different names for simultaneous instances that should remain separate. The process-wide convenience instance defaults to the Python entry-point filename.
+The `Scope` name is the stable program identity used by the Hub. Repeated runs
+with the same name reuse one program entry; use different names for simultaneous
+instances that should remain separate. Empty or omitted names are rejected.
 
 Transport and encoding failures return `False` or zero; they do not interrupt the instrumented application.

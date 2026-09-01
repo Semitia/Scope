@@ -1,8 +1,9 @@
 import math
 import time
 
-from debugscope import scope
+from debugscope import Scope
 
+scope = Scope("python-example")
 
 response = 0.0
 

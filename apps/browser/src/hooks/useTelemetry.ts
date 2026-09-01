@@ -41,5 +41,8 @@ export function useTelemetry(): TelemetryController {
     now: demo.now,
     clear: demo.clear,
     deleteSource: keepDemoDelete,
+    hubs: [],
+    addHub: () => false,
+    removeHub: () => {},
   };
 }

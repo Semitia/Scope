@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test';
 
 const LIVE_UDP_PORT = 49_171;
 
-function runLiveProducer(): Promise<void> {
+function runLiveProducer(udpPort = LIVE_UDP_PORT): Promise<void> {
   const workspaceRoot = process.cwd();
   return new Promise((resolvePromise, rejectPromise) => {
     const producer = spawn('python3', [resolve(workspaceRoot, 'tests/fixtures/emit_live_python.py')], {
@@ -14,7 +14,7 @@ function runLiveProducer(): Promise<void> {
         ...process.env,
         PYTHONPATH: resolve(workspaceRoot, 'sdk/python'),
         DEBUGSCOPE_UDP_HOST: '127.0.0.1',
-        DEBUGSCOPE_UDP_PORT: String(LIVE_UDP_PORT),
+        DEBUGSCOPE_UDP_PORT: String(udpPort),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -96,5 +96,22 @@ test('Python SDK streams through UDP and Hub into the browser workbench', async 
   await page.getByRole('button', { name: 'Delete live-python' }).click();
   await expect(page.locator('.source-card')).toHaveCount(0);
   await expect(page.getByText('Waiting for a producer')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Add Hub address' }).click();
+  await page.getByRole('textbox', { name: 'Hub address' }).fill('127.0.0.1:49174');
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  const remoteHub = page.locator('.hub-row').filter({ hasText: '127.0.0.1:49174' });
+  await expect(remoteHub.locator('.connection-dot:not(.stale)')).toBeVisible();
+
+  await runLiveProducer(49_173);
+  await expect(page.locator('.source-card strong').getByText('live-python', { exact: true })).toBeVisible();
+  await expect(page.locator('.source-card small')).toContainText('127.0.0.1:49174');
+
+  await page.reload();
+  await page.getByRole('button', { name: 'Add Hub address' }).click();
+  await expect(page.locator('.hub-row').filter({ hasText: '127.0.0.1:49174' })).toBeVisible();
+  await page.getByRole('button', { name: /Remove Hub ws:\/\/127\.0\.0\.1:49174/ }).click();
+  await expect(page.locator('.hub-row').filter({ hasText: '127.0.0.1:49174' })).toHaveCount(0);
+  await expect(page.locator('.source-card')).toHaveCount(0);
   expect(consoleErrors).toEqual([]);
 });

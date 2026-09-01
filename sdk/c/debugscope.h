@@ -36,10 +36,7 @@ typedef struct ds_frame {
     bool active;
 } ds_frame;
 
-/*
- * Initializes the process-wide SDK state. Calling this function is optional;
- * the first sample lazily initializes a source named "app".
- */
+/* Initializes the process-wide SDK state with a required, non-empty name. */
 void ds_init(const char *source_name);
 
 /* Overrides the IPv4 endpoint. Call before ds_init or the first sample. */

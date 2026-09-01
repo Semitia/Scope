@@ -103,12 +103,21 @@ def assert_packets(language: str, packets: list[DecodedPacket], expected_source:
     )
 
 
+def assert_cpp_instances(packets: list[DecodedPacket]) -> None:
+    hello_packets = [packet for packet in packets if packet.message_type == "HELLO"]
+    names = {packet.payload["source_name"] for packet in hello_packets}
+    source_ids = {packet.source_id for packet in hello_packets}
+    if names != {"cpp-controller", "cpp-estimator"} or len(source_ids) != 2:
+        raise AssertionError("C++: Scope instances do not have independent identities")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="debugscope-sdk-") as temporary_directory:
         build_directory = Path(temporary_directory)
         c_object = build_directory / "debugscope.o"
         c_emitter = build_directory / "emit-c"
         cpp_emitter = build_directory / "emit-cpp"
+        cpp_multi_emitter = build_directory / "emit-cpp-multi"
         rust_emitter = build_directory / "emit-rust"
 
         run(
@@ -123,6 +132,22 @@ def main() -> int:
                 str(ROOT / "sdk/c/debugscope.c"),
                 "-o",
                 str(c_object),
+            ]
+        )
+        run(
+            [
+                "c++",
+                "-std=c++17",
+                "-Wall",
+                "-Wextra",
+                "-Wpedantic",
+                "-Werror",
+                str(ROOT / "tests/fixtures/emit_cpp_multi.cpp"),
+                str(ROOT / "sdk/cpp/debugscope.cpp"),
+                "-I",
+                str(ROOT / "sdk/cpp"),
+                "-o",
+                str(cpp_multi_emitter),
             ]
         )
         run(
@@ -150,7 +175,7 @@ def main() -> int:
                 "-Wpedantic",
                 "-Werror",
                 str(ROOT / "tests/fixtures/emit_cpp.cpp"),
-                str(ROOT / "sdk/cpp/detail/transport.cpp"),
+                str(ROOT / "sdk/cpp/debugscope.cpp"),
                 "-I",
                 str(ROOT / "sdk/cpp"),
                 "-o",
@@ -203,10 +228,12 @@ def main() -> int:
             [sys.executable, str(ROOT / "tests/fixtures/emit_python.py")],
             python_path=ROOT / "sdk/python",
         )
+        cpp_multi_packets = collect_packets([str(cpp_multi_emitter)])
 
         assert_packets("C", c_packets, "c-smoke")
         assert_packets("C++", cpp_packets, "cpp-smoke")
         assert_packets("Python", python_packets, "python-smoke")
+        assert_cpp_instances(cpp_multi_packets)
         if cargo is not None and rustc is not None:
             rust_packets = collect_packets([str(rust_emitter)])
             assert_packets("Rust", rust_packets, "rust-smoke")

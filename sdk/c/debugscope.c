@@ -67,7 +67,7 @@ static ds_state g_ds = {
     {0},
     "127.0.0.1",
     DS_DEFAULT_UDP_PORT,
-    "app",
+    "",
     0u,
     0u,
     0u,
@@ -320,13 +320,14 @@ void ds_init(const char *source_name)
     if (g_ds.init_attempted) {
         return;
     }
-    g_ds.init_attempted = true;
 
     source_length = ds_bounded_string_length(source_name, DS_MAX_KEY_BYTES);
-    if (source_length > 0u && source_length <= DS_MAX_KEY_BYTES) {
-        memcpy(g_ds.source_name, source_name, source_length);
-        g_ds.source_name[source_length] = '\0';
+    if (source_length == 0u || source_length > DS_MAX_KEY_BYTES) {
+        return;
     }
+    g_ds.init_attempted = true;
+    memcpy(g_ds.source_name, source_name, source_length);
+    g_ds.source_name[source_length] = '\0';
 
     if (!g_ds.endpoint_configured) {
         environment_address = getenv("DEBUGSCOPE_UDP_HOST");
@@ -396,13 +397,6 @@ void ds_init(const char *source_name)
     ds_maybe_send_hello(ds_timestamp_ns());
 }
 
-static void ds_ensure_initialized(void)
-{
-    if (!g_ds.init_attempted) {
-        ds_init("app");
-    }
-}
-
 static size_t ds_value_size(ds_value_type type)
 {
     switch (type) {
@@ -462,7 +456,6 @@ static void ds_send_sample(const char *key, ds_value_type type, const void *valu
     size_t offset;
     uint64_t timestamp_ns;
 
-    ds_ensure_initialized();
     if (!g_ds.ready) {
         return;
     }
@@ -514,13 +507,14 @@ void ds_frame_begin(ds_frame *frame)
     if (frame == NULL) {
         return;
     }
-    ds_ensure_initialized();
-    frame->timestamp_ns = ds_timestamp_ns();
-    frame->active = true;
+    frame->active = g_ds.ready;
     ds_frame_reset_payload(frame);
-    if (g_ds.ready) {
-        ds_maybe_send_hello(frame->timestamp_ns);
+    if (!frame->active) {
+        frame->timestamp_ns = 0u;
+        return;
     }
+    frame->timestamp_ns = ds_timestamp_ns();
+    ds_maybe_send_hello(frame->timestamp_ns);
 }
 
 static bool ds_frame_add(ds_frame *frame, const char *key, ds_value_type type, const void *value)

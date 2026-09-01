@@ -14,7 +14,9 @@ export default defineConfig({
   webServer: {
     command:
       'npm run build && ' +
-      'node packages/hub/dist/index.js --udp-port 49171 --http-port 49172 --static apps/browser/dist --quiet',
+      'concurrently -k ' +
+      '"node packages/hub/dist/index.js --udp-port 49171 --http-port 49172 --static apps/browser/dist --quiet" ' +
+      '"node packages/hub/dist/index.js --udp-port 49173 --http-port 49174 --quiet"',
     url: 'http://127.0.0.1:49172/health',
     reuseExistingServer: false,
     timeout: 60_000,

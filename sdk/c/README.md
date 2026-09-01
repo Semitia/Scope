@@ -50,7 +50,11 @@ DEBUGSCOPE_UDP_HOST=127.0.0.1
 DEBUGSCOPE_UDP_PORT=4711
 ```
 
-The `ds_init` name is the stable program identity used by the Hub. Repeated runs with the same name reuse one program entry; use different names for simultaneous instances that should remain separate.
+Calling `ds_init` with a non-empty name is required before sending. The name is
+the stable program identity used by the Hub. Repeated runs with the same name
+reuse one program entry; use different names for simultaneous instances that
+should remain separate. Samples sent before successful initialization are
+ignored.
 
 Define `DEBUGSCOPE_ENABLED=0` to compile `DSCOPE(...)` calls to no-ops. Explicit `ds_f32`-style calls remain available.
 

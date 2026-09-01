@@ -1,152 +1,127 @@
-#ifndef DEBUGSCOPE_HPP
-#define DEBUGSCOPE_HPP
+#pragma once
 
-#include "detail/transport.hpp"
-
+#include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
 #include <type_traits>
 
 namespace debugscope {
 
 namespace detail {
-
-template <typename T>
-using clean_t = typename std::decay<T>::type;
-
-template <typename T>
-inline void send_value(const char *key, T value)
-{
-#if DEBUGSCOPE_ENABLED
-    using value_t = clean_t<T>;
-    static_assert(std::is_arithmetic<value_t>::value, "DebugScope values must be numeric or bool");
-
-    if constexpr (std::is_same<value_t, bool>::value) {
-        ds_bool(key, value);
-    } else if constexpr (std::is_floating_point<value_t>::value && sizeof(value_t) <= sizeof(float)) {
-        ds_f32(key, static_cast<float>(value));
-    } else if constexpr (std::is_floating_point<value_t>::value) {
-        ds_f64(key, static_cast<double>(value));
-    } else if constexpr (std::is_signed<value_t>::value && sizeof(value_t) <= sizeof(std::int32_t)) {
-        ds_i32(key, static_cast<std::int32_t>(value));
-    } else if constexpr (std::is_signed<value_t>::value) {
-        ds_i64(key, static_cast<std::int64_t>(value));
-    } else if constexpr (sizeof(value_t) <= sizeof(std::uint32_t)) {
-        ds_u32(key, static_cast<std::uint32_t>(value));
-    } else {
-        ds_u64(key, static_cast<std::uint64_t>(value));
-    }
-#else
-    (void)key;
-    (void)value;
-#endif
+template <typename Sink, typename T>
+bool send_numeric(Sink &sink, const char *key, T value);
 }
 
-template <typename T>
-inline bool add_frame_value(ds_frame *frame, const char *key, T value)
-{
-#if DEBUGSCOPE_ENABLED
-    using value_t = clean_t<T>;
-    static_assert(std::is_arithmetic<value_t>::value, "DebugScope values must be numeric or bool");
+struct ScopeOptions {
+    std::optional<std::string> host;
+    std::optional<std::uint16_t> port;
+    bool enabled = true;
+};
 
-    if constexpr (std::is_same<value_t, bool>::value) {
-        return ds_frame_bool(frame, key, value);
-    } else if constexpr (std::is_floating_point<value_t>::value && sizeof(value_t) <= sizeof(float)) {
-        return ds_frame_f32(frame, key, static_cast<float>(value));
-    } else if constexpr (std::is_floating_point<value_t>::value) {
-        return ds_frame_f64(frame, key, static_cast<double>(value));
-    } else if constexpr (std::is_signed<value_t>::value && sizeof(value_t) <= sizeof(std::int32_t)) {
-        return ds_frame_i32(frame, key, static_cast<std::int32_t>(value));
-    } else if constexpr (std::is_signed<value_t>::value) {
-        return ds_frame_i64(frame, key, static_cast<std::int64_t>(value));
-    } else if constexpr (sizeof(value_t) <= sizeof(std::uint32_t)) {
-        return ds_frame_u32(frame, key, static_cast<std::uint32_t>(value));
-    } else {
-        return ds_frame_u64(frame, key, static_cast<std::uint64_t>(value));
-    }
-#else
-    (void)frame;
-    (void)key;
-    (void)value;
-    return false;
-#endif
-}
+class Frame;
 
-} // namespace detail
-
-class Frame {
+class Scope {
 public:
-    Frame()
-    {
-#if DEBUGSCOPE_ENABLED
-        detail::ds_frame_begin(&frame_);
-#endif
-    }
+    explicit Scope(std::string source_name, ScopeOptions options = {});
+    Scope(std::string source_name, 
+          std::string host, 
+          std::uint16_t port = 4711,
+          bool enabled = true);
+    ~Scope();
 
-    Frame(const Frame &) = delete;
-    Frame &operator=(const Frame &) = delete;
-    Frame(Frame &&) = delete;
-    Frame &operator=(Frame &&) = delete;
+    Scope(const Scope &) = delete;
+    Scope &operator=(const Scope &) = delete;
+    Scope(Scope &&) = delete;
+    Scope &operator=(Scope &&) = delete;
 
     template <typename T>
     bool operator()(const char *key, T value)
     {
-        return !sent_ && detail::add_frame_value(&frame_, key, value);
+        return detail::send_numeric(*this, key, value);
     }
 
-    void send()
-    {
-        if (!sent_) {
-#if DEBUGSCOPE_ENABLED
-            detail::ds_frame_end(&frame_);
-#endif
-            sent_ = true;
-        }
-    }
+    bool boolean(const char *key, bool value);
+    bool i32(const char *key, std::int32_t value);
+    bool u32(const char *key, std::uint32_t value);
+    bool i64(const char *key, std::int64_t value);
+    bool u64(const char *key, std::uint64_t value);
+    bool f32(const char *key, float value);
+    bool f64(const char *key, double value);
+
+    [[nodiscard]] Frame frame();
+    void close();
 
 private:
-    detail::ds_frame frame_{};
-    bool sent_ = false;
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+
+    friend class Frame;
 };
 
-class Scope {
+class Frame {
 public:
-    explicit Scope(const char *source_name = "app")
-    {
-#if DEBUGSCOPE_ENABLED
-        detail::ds_init(source_name);
-#else
-        (void)source_name;
-#endif
-    }
+    ~Frame();
+
+    Frame(const Frame &) = delete;
+    Frame &operator=(const Frame &) = delete;
+    Frame(Frame &&) noexcept;
+    Frame &operator=(Frame &&) noexcept;
 
     template <typename T>
-    void operator()(const char *key, T value) const
+    bool operator()(const char *key, T value)
     {
-        detail::send_value(key, value);
+        return detail::send_numeric(*this, key, value);
     }
 
-    [[nodiscard]] Frame frame() const
-    {
-        return Frame{};
-    }
+    bool boolean(const char *key, bool value);
+    bool i32(const char *key, std::int32_t value);
+    bool u32(const char *key, std::uint32_t value);
+    bool i64(const char *key, std::int64_t value);
+    bool u64(const char *key, std::uint64_t value);
+    bool f32(const char *key, float value);
+    bool f64(const char *key, double value);
 
-    static void endpoint(const char *ipv4_address, std::uint16_t port = DS_DEFAULT_UDP_PORT)
-    {
-        detail::ds_set_endpoint(ipv4_address, port);
-    }
+    std::size_t send();
 
-    static void shutdown()
-    {
-        detail::ds_shutdown();
-    }
+private:
+    struct Impl;
+    explicit Frame(Scope &scope);
+    std::unique_ptr<Impl> impl_;
+
+    friend class Scope;
 };
 
-template <typename T>
-inline void plot(const char *key, T value)
+namespace detail {
+
+template <typename Sink, typename T>
+bool send_numeric(Sink &sink, const char *key, T value)
 {
-    detail::send_value(key, value);
+    using value_t = typename std::decay<T>::type;
+    static_assert(std::is_arithmetic<value_t>::value,
+                  "DebugScope values must be numeric or bool");
+
+    if constexpr (std::is_same<value_t, bool>::value) {
+        return sink.boolean(key, value);
+    } else if constexpr (std::is_floating_point<value_t>::value) {
+        if constexpr (sizeof(value_t) <= sizeof(float)) {
+            return sink.f32(key, static_cast<float>(value));
+        }
+        return sink.f64(key, static_cast<double>(value));
+    } else if constexpr (std::is_signed<value_t>::value) {
+        if constexpr (sizeof(value_t) <= sizeof(std::int32_t)) {
+            return sink.i32(key, static_cast<std::int32_t>(value));
+        }
+        return sink.i64(key, static_cast<std::int64_t>(value));
+    } else {
+        if constexpr (sizeof(value_t) <= sizeof(std::uint32_t)) {
+            return sink.u32(key, static_cast<std::uint32_t>(value));
+        }
+        return sink.u64(key, static_cast<std::uint64_t>(value));
+    }
 }
 
-} // namespace debugscope
+} // namespace detail
 
-#endif
+} // namespace debugscope

@@ -10,6 +10,8 @@ scope.sample('motor.speed', speed);
 scope.f32('motor.target', target);
 ```
 
+The source name is required and must be non-empty.
+
 MATLAB scalar types retain their natural DSCP wire type. `double` is FLOAT64,
 `single` is FLOAT32, `logical` is BOOL, and MATLAB integer classes map to the
 matching signed or unsigned DSCP type. Explicit typed methods (`i32`, `u32`,

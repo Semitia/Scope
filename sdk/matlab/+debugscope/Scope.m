@@ -22,7 +22,8 @@ classdef Scope < handle
     methods
         function obj = Scope(sourceName, varargin)
             if nargin < 1 || isempty(sourceName)
-                sourceName = 'matlab';
+                error('debugscope:SourceNameRequired', ...
+                    'A non-empty source name is required.');
             end
 
             defaultHost = getenv('DEBUGSCOPE_UDP_HOST');
@@ -42,7 +43,8 @@ classdef Scope < handle
 
             sourceName = string(sourceName);
             if ~isscalar(sourceName) || strlength(sourceName) == 0
-                sourceName = "matlab";
+                error('debugscope:InvalidSourceName', ...
+                    'Source name must be a non-empty string scalar.');
             end
             host = string(parser.Results.Host);
             if ~isscalar(host) || strlength(host) == 0

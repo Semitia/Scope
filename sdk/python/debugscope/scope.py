@@ -5,11 +5,9 @@ import os
 import secrets
 import socket
 import struct
-import sys
 import threading
 import time
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Final
 
 _MAGIC: Final = b"DSCP"
@@ -31,13 +29,6 @@ _INT64: Final = 4
 _UINT64: Final = 5
 _FLOAT32: Final = 6
 _FLOAT64: Final = 7
-
-
-def _default_source_name() -> str:
-    if not sys.argv or not sys.argv[0]:
-        return "python"
-    name = Path(sys.argv[0]).stem
-    return name or "python"
 
 
 def _environment_port() -> int:
@@ -84,13 +75,15 @@ class Scope:
 
     def __init__(
         self,
-        source_name: str | None = None,
+        source_name: str,
         *,
         host: str | None = None,
         port: int | None = None,
         enabled: bool = True,
     ) -> None:
-        self.source_name = source_name or _default_source_name()
+        if not isinstance(source_name, str) or not source_name:
+            raise ValueError("source_name must be a non-empty string")
+        self.source_name = source_name
         self.host = host or os.environ.get("DEBUGSCOPE_UDP_HOST", "127.0.0.1")
         self.port = port if port is not None else _environment_port()
         self.enabled = enabled
