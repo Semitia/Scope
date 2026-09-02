@@ -97,6 +97,44 @@ def assert_packets(language: str, packets: list[DecodedPacket], expected_source:
     if items["speed"][0] != "FLOAT32":
         raise AssertionError(f"{language}: float type mismatch")
 
+    if language in ("C++", "Python"):
+        for key in (
+            "direct.0",
+            "direct.1",
+            "psi.0",
+            "psi.1",
+            "psi.2",
+            "limits.0",
+            "limits.1",
+            "matrix.0.0",
+            "matrix.1.1",
+            "impedance.real",
+            "impedance.imag",
+        ):
+            if key not in items:
+                raise AssertionError(f"{language}: missing expanded container field {key}")
+        if items["limits.0"] != ("BOOL", True):
+            raise AssertionError(f"{language}: container BOOL mismatch")
+        if "point.x" not in items or "point.y" not in items:
+            raise AssertionError(f"{language}: named fields were not expanded")
+
+        expanded_keys = {
+            "psi.0",
+            "psi.1",
+            "psi.2",
+            "limits.0",
+            "limits.1",
+            "matrix.0.0",
+            "matrix.1.1",
+        }
+        expanded_timestamps = {
+            packet.timestamp_ns
+            for packet in packets
+            if any(item["key"] in expanded_keys for item in packet.payload.get("items", []))
+        }
+        if len(expanded_timestamps) != 1:
+            raise AssertionError(f"{language}: one frame did not retain one timestamp")
+
     print(
         f"{language:6} {len(packets)} packets, "
         f"source=0x{packets[0].source_id:08x}, keys={','.join(sorted(items))}"

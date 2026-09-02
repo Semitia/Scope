@@ -27,6 +27,27 @@ frame("error", target - speed);
 frame.send();
 ```
 
+Containers are expanded into dot-separated scalar channels automatically. This
+works with C arrays, `std::array`, iterable standard containers, maps, tuples,
+pairs, `std::complex`, and matrix types that provide `rows()`, `cols()`, and
+`operator()(row, col)` (including Eigen dense vectors and matrices):
+
+```cpp
+auto frame = scope.frame();
+frame("error.distance", err_dist);       // scalar
+frame("psi", psi_get);                  // Eigen::Vector6f -> psi.0 ... psi.5
+frame("limit", limit_status);            // std::array<bool, 6>
+frame("mc", mc);                        // Eigen vector
+frame("jacobian", jacobian);            // matrix -> jacobian.0.0 ...
+frame.send();
+```
+
+Nested containers are expanded recursively. A vector is named `key.0`,
+`key.1`, and so on; a matrix is named `key.row.column`. All expanded values
+added to a `Frame` retain their own scalar wire type and use the frame's one
+timestamp. Passing a container directly to `Scope`, such as
+`scope("psi", psi_get)`, also creates and sends one frame automatically.
+
 The frame is intentionally explicit: destroying it does not send it. This prevents partially constructed frames from being emitted during error handling.
 
 The `Scope` constructor name is the stable program identity used by the Hub. Repeated runs with the same name reuse one program entry; use different names for simultaneous instances that should remain separate.

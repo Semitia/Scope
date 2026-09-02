@@ -27,6 +27,26 @@ scope.frame({
 })
 ```
 
+Lists, tuples, nested mappings, dataclasses, named tuples, generators, complex
+numbers, and array/tensor objects with `tolist()` or `to_list()` are expanded
+into dot-separated scalar channels automatically:
+
+```python
+scope.frame({
+    "error.distance": err_dist,
+    "psi": psi_array,          # NumPy/PyTorch vector -> psi.0 ...
+    "limit": limit_status,     # list[bool]
+    "matrix": matrix,          # -> matrix.0.0 ...
+})
+
+# A single container is also sent as one frame.
+scope("psi", psi_array)
+```
+
+NumPy is optional; DebugScope does not add it as a dependency. NumPy scalar
+signedness and `float32`/`float64` precision are retained on the wire. Expanded
+values all share the frame timestamp.
+
 Every producer has an explicit, required name. Constructing it does not start a
 thread; its UDP socket opens lazily on the first send.
 

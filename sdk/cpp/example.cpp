@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include <thread>
+#include <array>
 
 int main()
 {
@@ -19,6 +20,7 @@ int main()
         frame("motor.target", target);
         frame("motor.speed", response);
         frame("motor.error", target - response);
+        frame("motor.state", std::array<double, 2>{response, target - response});
         frame.send();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(20));

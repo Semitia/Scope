@@ -17,6 +17,7 @@ for step in range(500):
             "motor.target": target,
             "motor.speed": response,
             "motor.error": target - response,
+            "motor.state": [response, target - response],
         }
     )
     time.sleep(0.02)
