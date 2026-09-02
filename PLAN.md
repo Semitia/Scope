@@ -17,7 +17,7 @@ The repository now contains the complete browser-first vertical slice that this 
 - a local TypeScript Hub with source/channel discovery, bounded recent history, memory limits, WebSocket snapshots/deltas, and static browser serving;
 - stable program identity based on the producer name, with PID retained only as current-run metadata;
 - independent C and C++ SDKs plus Python, Rust, and MATLAB SDKs;
-- a responsive light/dark browser workbench with source deletion, multiple independent Scope panels, per-Scope channel binding and Y ranges, Auto Y, zoom/pan, pause/clear, cursor readout, channel colors and line styles, and persistent per-program layouts/settings;
+- a responsive light/dark browser workbench with source deletion, waveform, Value Bars, and Indicators panels, offline workspace preparation, drag/resize grid layout, per-panel channel binding, manual/maintained ranges, enum color maps, Auto Y, zoom/pan, pause/clear, cursor readout, channel colors and line styles, and persistent per-program layouts/settings;
 - sample-time and real-time timeline modes, including disconnected blank regions across real input gaps;
 - a shared React/uPlot UI core plus an initial VS Code Bottom Panel with Hub discovery/start, source and channel selection, compact waveform monitoring, pause/clear, history windows, and Open in Browser;
 - Hub, protocol, SDK compatibility, browser interaction, timeline, and live end-to-end tests.
@@ -25,7 +25,7 @@ The repository now contains the complete browser-first vertical slice that this 
 Still deferred:
 
 - automated VS Code Extension Host coverage, Remote SSH/WSL/Dev Container support, and Marketplace publishing;
-- freeform/resizable panel layout, record/replay, export, advanced cursors, and additional plot types;
+- record/replay, export, advanced cursors, and additional analysis plot types;
 - automated MATLAB runtime coverage and a broader cross-platform CI matrix;
 - public package publishing and formal v0.1 release packaging.
 
@@ -1366,9 +1366,9 @@ Later:
 
 ## 42.0 Implemented panel baseline
 
-The browser now uses a minimal extensible panel model. A workspace may contain up to eight independently rendered Scope panels. Each Scope owns a stable ID, title, and channel-key set; the layout is saved under the producer's stable program identity, so restarting a process does not create or select a new layout.
+The browser uses an extensible panel model with waveform, Value Bars, and Indicators widgets. A workspace may contain up to eight panels. Each panel owns a stable ID, editable title, type, channel or numbered-group binding, widget configuration, and grid rectangle. Value Bar endpoint labels edit that channel's range in place, with one compact icon for returning to automatic history; every waveform owns its Auto Y and time-window settings; Indicators use narrow state-dot cards that show the raw numeric state. Layouts are saved under the producer's stable program identity.
 
-The current layout is intentionally constrained to a vertical stack. A single Scope fills the available workspace, while multiple Scopes keep a readable minimum height and scroll as needed. The active Scope is visually identified, the sidebar edits only that Scope, and every Scope also exposes a local channel picker. Other widget types, drag/drop placement, resizing, renaming, and arbitrary grids remain later refinements rather than prerequisites for validating the data-binding model.
+The desktop workspace is a persistent 12-column grid with drag-to-move, lower-right resizing, collision push-down, and side-by-side columns. Narrow windows render the same saved layout as a single readable column. A producer is not required to prepare the workspace: the offline layout is saved as a template and inherited when a program is first discovered. Workspace JSON export/import makes the full panel arrangement, channel bindings, ranges, and state palettes portable across browsers and machines without changing the telemetry protocol. The active panel is visually identified, the sidebar edits only that panel, and every panel exposes a local channel picker. Sidebar channel groups are collapsible with per-program persistence; filtering temporarily reveals matching groups.
 
 ## 42.1 Product quality bar
 
@@ -2358,7 +2358,6 @@ Test at least several currently supported versions.
 
 Likely additions:
 
-- resizable/reorderable Scope panels and saved grid layouts;
 - improved channel grouping;
 - explicit numeric Y-range controls;
 - channel rename/alias;

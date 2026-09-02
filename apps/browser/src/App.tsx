@@ -3,6 +3,7 @@ import {
   Activity,
   ChevronDown,
   Database,
+  Download,
   Eye,
   EyeOff,
   Gauge,
@@ -19,13 +20,26 @@ import {
   Server,
   Settings,
   SlidersHorizontal,
+  GripVertical,
   Sun,
   Trash2,
+  Upload,
   WifiOff,
   X,
 } from 'lucide-react';
 import { WaveformPlot } from './components/WaveformPlot';
+import { IndicatorPanel } from './components/IndicatorPanel';
+import { ValueBarPanel } from './components/ValueBarPanel';
 import { useTelemetry } from './hooks/useTelemetry';
+import {
+  DEFAULT_STATE_COLORS,
+  panelTypeLabel,
+  type PanelDefinition,
+  type PanelGridLayout,
+  type PanelType,
+  type StateColorDefinition,
+  type ValueBarChannelRange,
+} from './panelTypes';
 import { prepareTimeline } from './timeline';
 import type {
   ChannelDefinition,
@@ -45,20 +59,46 @@ const CHANNEL_STYLES_KEY = 'debugscope.channel-styles.v1';
 const SCOPE_LAYOUTS_KEY = 'debugscope.scope-layouts.v1';
 const THEME_KEY = 'debugscope.theme.v1';
 const SETTINGS_KEY = 'debugscope.settings.v1';
-const MAX_SCOPE_PANELS = 8;
+const COLLAPSED_CHANNEL_GROUPS_KEY = 'debugscope.collapsed-channel-groups.v1';
+const MAX_PANELS = 8;
+const WORKSPACE_TEMPLATE_KEY = '__debugscope_workspace_template__';
+const GRID_COLUMNS = 12;
+const GRID_GAP = 12;
+const GRID_ROW_HEIGHT = 72;
+const MIN_PANEL_WIDTH = 3;
+const MIN_PANEL_HEIGHT = 2;
+const WORKSPACE_CONFIG_SCHEMA = 'debugscope.workspace';
+const WORKSPACE_CONFIG_VERSION = 1;
+const MAX_WORKSPACE_FILE_BYTES = 1024 * 1024;
 
 interface UserSettings {
   scrollWhenIdle: boolean;
 }
 
-interface ScopePanelDefinition {
-  id: string;
-  type: 'scope';
-  title: string;
-  channelKeys: string[];
+type ScopeLayouts = Record<string, PanelDefinition[]>;
+
+interface LayoutInteraction {
+  kind: 'move' | 'resize';
+  panelId: string;
+  startX: number;
+  startY: number;
+  origin: PanelGridLayout;
+  panels: PanelDefinition[];
+  workspaceWidth: number;
 }
 
-type ScopeLayouts = Record<string, ScopePanelDefinition[]>;
+interface WorkspaceConfigFile {
+  schema: typeof WORKSPACE_CONFIG_SCHEMA;
+  version: typeof WORKSPACE_CONFIG_VERSION;
+  exportedAt: string;
+  sourceName: string;
+  panels: PanelDefinition[];
+}
+
+interface WorkspaceFeedback {
+  kind: 'success' | 'error';
+  message: string;
+}
 
 const NUMBER_FORMAT = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 1,
@@ -251,36 +291,259 @@ function initialSettings(): UserSettings {
   }
 }
 
+function initialCollapsedChannelGroups(): Record<string, string[]> {
+  try {
+    const stored = JSON.parse(localStorage.getItem(COLLAPSED_CHANNEL_GROUPS_KEY) ?? '{}') as unknown;
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
+    return Object.fromEntries(Object.entries(stored as Record<string, unknown>).flatMap(([key, value]) => (
+      Array.isArray(value)
+        ? [[key, [...new Set(value.filter((group): group is string => typeof group === 'string'))]]]
+        : []
+    )));
+  } catch {
+    return {};
+  }
+}
+
+function defaultPanelLayout(index: number, single = false): PanelGridLayout {
+  const height = single ? 8 : 4;
+  return { x: 0, y: index * height, width: GRID_COLUMNS, height };
+}
+
+function normalizePanelLayout(value: unknown, fallback: PanelGridLayout): PanelGridLayout {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback;
+  const candidate = value as Record<string, unknown>;
+  const number = (key: string, defaultValue: number) => (
+    typeof candidate[key] === 'number' && Number.isFinite(candidate[key])
+      ? Math.round(candidate[key])
+      : defaultValue
+  );
+  const width = Math.max(MIN_PANEL_WIDTH, Math.min(GRID_COLUMNS, number('width', fallback.width)));
+  const x = Math.max(0, Math.min(GRID_COLUMNS - width, number('x', fallback.x)));
+  return {
+    x,
+    y: Math.max(0, number('y', fallback.y)),
+    width,
+    height: Math.max(MIN_PANEL_HEIGHT, number('height', fallback.height)),
+  };
+}
+
+function isWorkspacePanelLayout(value: unknown): value is PanelGridLayout {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const layout = value as Record<string, unknown>;
+  if (!['x', 'y', 'width', 'height'].every((key) => (
+    typeof layout[key] === 'number'
+    && Number.isFinite(layout[key])
+    && Number.isInteger(layout[key])
+  ))) return false;
+  const { x, y, width, height } = layout as unknown as PanelGridLayout;
+  return x >= 0
+    && y >= 0
+    && width >= MIN_PANEL_WIDTH
+    && width <= GRID_COLUMNS
+    && x + width <= GRID_COLUMNS
+    && height >= MIN_PANEL_HEIGHT
+    && y <= 100_000
+    && height <= 10_000;
+}
+
+function layoutsOverlap(left: PanelGridLayout, right: PanelGridLayout): boolean {
+  return left.x < right.x + right.width
+    && left.x + left.width > right.x
+    && left.y < right.y + right.height
+    && left.y + left.height > right.y;
+}
+
+function placePanelWithoutOverlap(
+  panels: PanelDefinition[],
+  panelId: string,
+  layout: PanelGridLayout,
+): PanelDefinition[] {
+  const moving = panels.find((panel) => panel.id === panelId);
+  if (!moving) return panels;
+  const layouts = new Map<string, PanelGridLayout>([[panelId, layout]]);
+  const placed: PanelGridLayout[] = [layout];
+  const remaining = panels
+    .filter((panel) => panel.id !== panelId)
+    .sort((left, right) => left.layout.y - right.layout.y || left.layout.x - right.layout.x);
+
+  for (const panel of remaining) {
+    let next = { ...panel.layout };
+    let blockers = placed.filter((candidate) => layoutsOverlap(next, candidate));
+    while (blockers.length > 0) {
+      next.y = Math.max(...blockers.map((candidate) => candidate.y + candidate.height));
+      blockers = placed.filter((candidate) => layoutsOverlap(next, candidate));
+    }
+    layouts.set(panel.id, next);
+    placed.push(next);
+  }
+
+  return panels.map((panel) => ({ ...panel, layout: layouts.get(panel.id) ?? panel.layout }));
+}
+
+function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[] {
+  const fail = (message: string): never => {
+    throw new Error(message);
+  };
+  if (!Array.isArray(value)) {
+    if (strict) fail('The panels field must be an array.');
+    return [];
+  }
+  if (strict && (value.length === 0 || value.length > MAX_PANELS)) {
+    fail(`A workspace must contain between 1 and ${MAX_PANELS} panels.`);
+  }
+
+  const panels: PanelDefinition[] = [];
+  const ids = new Set<string>();
+  for (const [panelIndex, rawPanel] of value.slice(0, MAX_PANELS).entries()) {
+    if (!rawPanel || typeof rawPanel !== 'object' || Array.isArray(rawPanel)) {
+      if (strict) fail(`Panel ${panelIndex + 1} must be an object.`);
+      continue;
+    }
+    const panel = rawPanel as Record<string, unknown>;
+    const validType = panel.type === 'scope'
+      || panel.type === 'value-bar'
+      || panel.type === 'indicators';
+    const validIdentity = typeof panel.id === 'string'
+      && panel.id.length > 0
+      && typeof panel.title === 'string'
+      && panel.title.length > 0;
+    const validChannelKeys = Array.isArray(panel.channelKeys)
+      && panel.channelKeys.every((key) => typeof key === 'string' && key.length > 0);
+    if (!validType || !validIdentity || !validChannelKeys) {
+      if (strict) fail(`Panel ${panelIndex + 1} has an invalid type, identity, or channel binding.`);
+      continue;
+    }
+    if (strict && (
+      (panel.id as string).length > 200
+      || (panel.title as string).length > 120
+      || (panel.channelKeys as string[]).length > 1024
+      || !isWorkspacePanelLayout(panel.layout)
+    )) {
+      fail(`Panel ${panelIndex + 1} has invalid limits or grid coordinates.`);
+    }
+    if (ids.has(panel.id as string)) {
+      if (strict) fail(`Panel ${panelIndex + 1} reuses an existing panel ID.`);
+      continue;
+    }
+    ids.add(panel.id as string);
+
+    const base = {
+      id: panel.id as string,
+      title: panel.title as string,
+      channelKeys: [...new Set(panel.channelKeys as string[])],
+      layout: normalizePanelLayout(
+        panel.layout,
+        defaultPanelLayout(panelIndex, value.length === 1),
+      ),
+    };
+    if (panel.type === 'value-bar') {
+      const validRange = (panel.rangeMode === 'auto' || panel.rangeMode === 'manual')
+        && typeof panel.manualMin === 'number'
+        && Number.isFinite(panel.manualMin)
+        && typeof panel.manualMax === 'number'
+        && Number.isFinite(panel.manualMax);
+      if (strict && !validRange) fail(`Value Bars panel ${panelIndex + 1} has an invalid range.`);
+      const rawChannelRanges = panel.channelRanges && typeof panel.channelRanges === 'object'
+        && !Array.isArray(panel.channelRanges)
+        ? Object.entries(panel.channelRanges as Record<string, unknown>)
+        : [];
+      const channelRanges = Object.fromEntries(rawChannelRanges.flatMap(([channelKey, rawRange]) => {
+        if (!channelKey || !rawRange || typeof rawRange !== 'object' || Array.isArray(rawRange)) return [];
+        const range = rawRange as Record<string, unknown>;
+        if (
+          (range.mode !== 'auto' && range.mode !== 'manual')
+          || typeof range.min !== 'number'
+          || !Number.isFinite(range.min)
+          || typeof range.max !== 'number'
+          || !Number.isFinite(range.max)
+        ) return [];
+        return [[channelKey, { mode: range.mode, min: range.min, max: range.max } satisfies ValueBarChannelRange]];
+      }));
+      if (strict && rawChannelRanges.length !== Object.keys(channelRanges).length) {
+        fail(`Value Bars panel ${panelIndex + 1} has invalid per-channel ranges.`);
+      }
+      if (strict && panel.channelGroup !== undefined && (
+        typeof panel.channelGroup !== 'string' || panel.channelGroup.length === 0
+      )) {
+        fail(`Value Bars panel ${panelIndex + 1} has an invalid channel group.`);
+      }
+      panels.push({
+        ...base,
+        type: 'value-bar',
+        rangeMode: panel.rangeMode === 'manual' ? 'manual' : 'auto',
+        manualMin: typeof panel.manualMin === 'number' && Number.isFinite(panel.manualMin)
+          ? panel.manualMin : 0,
+        manualMax: typeof panel.manualMax === 'number' && Number.isFinite(panel.manualMax)
+          ? panel.manualMax : 1,
+        channelGroup: typeof panel.channelGroup === 'string' ? panel.channelGroup : undefined,
+        channelRanges,
+      });
+      continue;
+    }
+    if (panel.type === 'indicators') {
+      const rawStateColors = Array.isArray(panel.stateColors) ? panel.stateColors : [];
+      const stateColors = rawStateColors.flatMap((state): StateColorDefinition[] => {
+        if (!state || typeof state !== 'object' || Array.isArray(state)) return [];
+        const candidate = state as Record<string, unknown>;
+        if (
+          typeof candidate.value !== 'number'
+          || !Number.isFinite(candidate.value)
+          || typeof candidate.label !== 'string'
+          || typeof candidate.color !== 'string'
+          || !/^#[0-9a-f]{6}$/i.test(candidate.color)
+        ) return [];
+        return [{ value: candidate.value, label: candidate.label, color: candidate.color }];
+      });
+      const distinctStateValues = new Set(stateColors.map((state) => state.value));
+      if (strict && (
+        stateColors.length === 0
+        || stateColors.length > 64
+        || stateColors.length !== rawStateColors.length
+        || distinctStateValues.size !== stateColors.length
+      )) {
+        fail(`Indicators panel ${panelIndex + 1} has an invalid state color map.`);
+      }
+      if (strict && panel.channelGroup !== undefined && (
+        typeof panel.channelGroup !== 'string' || panel.channelGroup.length === 0
+      )) {
+        fail(`Indicators panel ${panelIndex + 1} has an invalid channel group.`);
+      }
+      panels.push({
+        ...base,
+        type: 'indicators',
+        channelGroup: typeof panel.channelGroup === 'string' ? panel.channelGroup : undefined,
+        stateColors: stateColors.length > 0
+          ? stateColors
+          : DEFAULT_STATE_COLORS.map((state) => ({ ...state })),
+      });
+      continue;
+    }
+    if (strict && panel.autoY !== undefined && typeof panel.autoY !== 'boolean') {
+      fail(`Waveform panel ${panelIndex + 1} has an invalid Auto Y setting.`);
+    }
+    if (strict && panel.windowSeconds !== undefined && ![5, 10, 30].includes(Number(panel.windowSeconds))) {
+      fail(`Waveform panel ${panelIndex + 1} has an invalid time window.`);
+    }
+    panels.push({
+      ...base,
+      type: 'scope',
+      autoY: panel.autoY !== false,
+      windowSeconds: [5, 10, 30].includes(Number(panel.windowSeconds))
+        ? Number(panel.windowSeconds)
+        : 10,
+    });
+  }
+  return panels;
+}
+
 function initialScopeLayouts(): ScopeLayouts {
   try {
     const stored = JSON.parse(localStorage.getItem(SCOPE_LAYOUTS_KEY) ?? '{}') as unknown;
     if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
-
     return Object.fromEntries(
       Object.entries(stored as Record<string, unknown>)
-        .map(([programKey, value]) => {
-          if (!Array.isArray(value)) return [programKey, []] as const;
-          const panels = value
-            .filter((panel): panel is Record<string, unknown> => (
-              Boolean(panel) && typeof panel === 'object' && !Array.isArray(panel)
-            ))
-            .filter((panel) => (
-              panel.type === 'scope'
-              && typeof panel.id === 'string'
-              && typeof panel.title === 'string'
-              && Array.isArray(panel.channelKeys)
-            ))
-            .slice(0, MAX_SCOPE_PANELS)
-            .map((panel) => ({
-              id: panel.id as string,
-              type: 'scope' as const,
-              title: panel.title as string,
-              channelKeys: [...new Set(
-                (panel.channelKeys as unknown[]).filter((key): key is string => typeof key === 'string'),
-              )],
-            }));
-          return [programKey, panels] as const;
-        })
+        .map(([programKey, value]) => [programKey, parsePanelDefinitions(value)] as const)
         .filter(([, panels]) => panels.length > 0),
     );
   } catch {
@@ -288,16 +551,60 @@ function initialScopeLayouts(): ScopeLayouts {
   }
 }
 
+function parseWorkspaceConfig(value: unknown): WorkspaceConfigFile {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('The workspace file must contain a JSON object.');
+  }
+  const config = value as Record<string, unknown>;
+  if (config.schema !== WORKSPACE_CONFIG_SCHEMA) {
+    throw new Error('This is not a DebugScope workspace file.');
+  }
+  if (config.version !== WORKSPACE_CONFIG_VERSION) {
+    throw new Error(`Workspace version ${String(config.version)} is not supported.`);
+  }
+  return {
+    schema: WORKSPACE_CONFIG_SCHEMA,
+    version: WORKSPACE_CONFIG_VERSION,
+    exportedAt: typeof config.exportedAt === 'string' ? config.exportedAt : '',
+    sourceName: typeof config.sourceName === 'string' ? config.sourceName : '',
+    panels: parsePanelDefinitions(config.panels, true),
+  };
+}
+
+function workspaceFilename(sourceName: string): string {
+  const slug = sourceName.trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'workspace';
+  return `debugscope-${slug}.workspace.json`;
+}
+
 function createScopeId(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   return `scope-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function nextScopeTitle(panels: ScopePanelDefinition[]): string {
+function nextPanelTitle(panels: PanelDefinition[], type: PanelType): string {
+  const base = type === 'scope' ? 'Scope' : type === 'value-bar' ? 'Value Bars' : 'Indicators';
   const titles = new Set(panels.map((panel) => panel.title));
   let number = 1;
-  while (titles.has(`Scope ${number}`)) number += 1;
-  return `Scope ${number}`;
+  while (titles.has(`${base} ${number}`)) number += 1;
+  return `${base} ${number}`;
+}
+
+function effectivePanelChannelKeys(
+  panel: PanelDefinition | undefined,
+  channels: ChannelDefinition[],
+): string[] {
+  if (!panel || panel.type === 'scope' || !panel.channelGroup) return panel?.channelKeys ?? [];
+  const prefix = `${panel.channelGroup}.`;
+  return channels
+    .filter((channel) => {
+      if (!channel.key.startsWith(prefix)) return false;
+      return /^\d+$/.test(channel.key.slice(prefix.length));
+    })
+    .map((channel) => channel.key);
 }
 
 export default function App() {
@@ -309,18 +616,25 @@ export default function App() {
 
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [settings, setSettings] = useState<UserSettings>(initialSettings);
+  const [collapsedChannelGroups, setCollapsedChannelGroups] = useState<Record<string, string[]>>(
+    initialCollapsedChannelGroups,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [workspaceFeedback, setWorkspaceFeedback] = useState<WorkspaceFeedback | null>(null);
   const [channelStyles, setChannelStyles] = useState<Record<string, StoredChannelStyle>>(
     initialChannelStyles,
   );
   const [scopeLayouts, setScopeLayouts] = useState<ScopeLayouts>(initialScopeLayouts);
+  const [layoutInteraction, setLayoutInteraction] = useState<LayoutInteraction | null>(null);
+  const [layoutPreview, setLayoutPreview] = useState<PanelDefinition[] | null>(null);
   const [activeScopeId, setActiveScopeId] = useState<string | null>(null);
+  const [editingPanelTitleId, setEditingPanelTitleId] = useState<string | null>(null);
+  const [panelTitleDraft, setPanelTitleDraft] = useState('');
   const [channelPickerScopeId, setChannelPickerScopeId] = useState<string | null>(null);
+  const [addPanelMenuOpen, setAddPanelMenuOpen] = useState(false);
   const [styleEditorChannelId, setStyleEditorChannelId] = useState<string | null>(null);
   const [selectedChannel, setSelectedChannel] = useState('');
-  const [windowSeconds, setWindowSeconds] = useState(10);
   const [pausedAt, setPausedAt] = useState<number | null>(null);
-  const [autoY, setAutoY] = useState(true);
   const [channelSearch, setChannelSearch] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hubEditorOpen, setHubEditorOpen] = useState(false);
@@ -328,6 +642,9 @@ export default function App() {
   const [hubAddressError, setHubAddressError] = useState('');
   const [visiblePointCounts, setVisiblePointCounts] = useState<Record<string, number>>({});
   const [renderRates, setRenderRates] = useState<Record<string, number>>({});
+  const gridRef = useRef<HTMLDivElement>(null);
+  const layoutPreviewRef = useRef<PanelDefinition[] | null>(null);
+  const workspaceFileRef = useRef<HTMLInputElement>(null);
 
   const sourceKeys = useMemo(
     () => new Map(telemetry.sources.map((source) => [source.id, source.programKey])),
@@ -344,22 +661,58 @@ export default function App() {
     })),
     [channelStyles, rawChannels, styleKeyFor],
   );
-  const layoutKey = activeSource?.programKey ?? null;
-  const defaultScope = useMemo<ScopePanelDefinition>(() => ({
+  const layoutKey = activeSource?.programKey ?? WORKSPACE_TEMPLATE_KEY;
+  const defaultScope = useMemo<PanelDefinition>(() => ({
     id: `scope-default:${layoutKey ?? 'waiting'}`,
     type: 'scope',
     title: 'Scope 1',
     channelKeys: channels.slice(0, 4).map((channel) => channel.key),
+    layout: defaultPanelLayout(0, true),
+    autoY: true,
+    windowSeconds: 10,
   }), [channelIdentity, layoutKey]);
   const scopePanels = useMemo(() => {
-    const stored = layoutKey ? scopeLayouts[layoutKey] : undefined;
-    return stored?.length ? stored : [defaultScope];
+    const stored = scopeLayouts[layoutKey];
+    if (stored?.length) return stored;
+    const template = activeSource ? scopeLayouts[WORKSPACE_TEMPLATE_KEY] : undefined;
+    if (template?.length) {
+      return template.map((panel) => (
+        panel.type === 'scope'
+        && panel.id === `scope-default:${WORKSPACE_TEMPLATE_KEY}`
+        && panel.channelKeys.length === 0
+          ? {
+            ...panel,
+            id: `scope-default:${layoutKey}`,
+            channelKeys: channels.slice(0, 4).map((channel) => channel.key),
+          }
+          : panel
+      ));
+    }
+    return [defaultScope];
   }, [defaultScope, layoutKey, scopeLayouts]);
+  const displayedPanels = layoutPreview ?? scopePanels;
   const activeScope = scopePanels.find((panel) => panel.id === activeScopeId) ?? scopePanels[0];
   const activeScopeChannelIds = useMemo(() => {
-    const keys = new Set(activeScope?.channelKeys ?? []);
+    const keys = new Set(effectivePanelChannelKeys(activeScope, channels));
     return new Set(channels.filter((channel) => keys.has(channel.key)).map((channel) => channel.id));
   }, [activeScope, channels]);
+  const numberedChannelGroups = useMemo(() => {
+    const groups = new Map<string, ChannelDefinition[]>();
+    for (const channel of channels) {
+      const match = /^(.*)\.(\d+)$/.exec(channel.key);
+      if (!match?.[1]) continue;
+      const group = groups.get(match[1]) ?? [];
+      group.push(channel);
+      groups.set(match[1], group);
+    }
+    return [...groups.entries()]
+      .filter(([, groupChannels]) => groupChannels.length > 1)
+      .map(([name, groupChannels]) => [name, groupChannels.sort((left, right) => {
+        const leftIndex = Number(left.key.split('.').at(-1));
+        const rightIndex = Number(right.key.split('.').at(-1));
+        return leftIndex - rightIndex;
+      })] as const);
+  }, [channels]);
   const styleEditorChannel = channels.find((channel) => channel.id === styleEditorChannelId);
   const paused = pausedAt !== null;
   const timeline = useMemo(
@@ -389,17 +742,62 @@ export default function App() {
   }, [settings]);
 
   useEffect(() => {
+    localStorage.setItem(COLLAPSED_CHANNEL_GROUPS_KEY, JSON.stringify(collapsedChannelGroups));
+  }, [collapsedChannelGroups]);
+
+  useEffect(() => {
     localStorage.setItem(SCOPE_LAYOUTS_KEY, JSON.stringify(scopeLayouts));
   }, [scopeLayouts]);
 
   useEffect(() => {
-    if (!settingsOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSettingsOpen(false);
+    const anyOverlayOpen = settingsOpen
+      || addPanelMenuOpen
+      || hubEditorOpen
+      || Boolean(styleEditorChannelId)
+      || Boolean(channelPickerScopeId);
+    if (!anyOverlayOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target) return;
+      if (settingsOpen && !target.closest('.settings-panel, .settings-button, .settings-scrim')) {
+        setSettingsOpen(false);
+      }
+      if (addPanelMenuOpen && !target.closest('.add-panel-control, .add-panel-scrim')) {
+        setAddPanelMenuOpen(false);
+      }
+      if (hubEditorOpen && !target.closest('.hub-editor, [data-hub-editor-trigger]')) {
+        setHubEditorOpen(false);
+      }
+      if (styleEditorChannelId && !target.closest('.style-editor, .style-button')) {
+        setStyleEditorChannelId(null);
+      }
+      if (channelPickerScopeId && !target.closest(
+        '.scope-channel-picker, .scope-picker-scrim, [data-channel-picker-trigger]',
+      )) {
+        setChannelPickerScopeId(null);
+      }
     };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setSettingsOpen(false);
+      setAddPanelMenuOpen(false);
+      setHubEditorOpen(false);
+      setStyleEditorChannelId(null);
+      setChannelPickerScopeId(null);
+    };
+    document.addEventListener('pointerdown', closeOutside);
     window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [settingsOpen]);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [
+    addPanelMenuOpen,
+    channelPickerScopeId,
+    hubEditorOpen,
+    settingsOpen,
+    styleEditorChannelId,
+  ]);
 
   useEffect(() => {
     const nextIds = new Set(channels.map((channel) => channel.id));
@@ -435,6 +833,7 @@ export default function App() {
     setStyleEditorChannelId(null);
     setActiveScopeId(null);
     setChannelPickerScopeId(null);
+    setEditingPanelTitleId(null);
   }, [telemetry.activeSourceId]);
 
   const getViewTime = useCallback(
@@ -484,48 +883,194 @@ export default function App() {
     return [...groups.entries()];
   }, [filteredChannels]);
 
+  const collapsedGroupsForSource = useMemo(
+    () => new Set(collapsedChannelGroups[layoutKey] ?? []),
+    [collapsedChannelGroups, layoutKey],
+  );
+
+  const toggleChannelGroup = useCallback((group: string) => {
+    setCollapsedChannelGroups((current) => {
+      const nextGroups = new Set(current[layoutKey] ?? []);
+      if (nextGroups.has(group)) nextGroups.delete(group);
+      else nextGroups.add(group);
+      return { ...current, [layoutKey]: [...nextGroups] };
+    });
+  }, [layoutKey]);
+
   const channelIndexes = useMemo(
     () => new Map(channels.map((channel, index) => [channel.id, index])),
     [channels],
   );
 
   const updateScopePanels = useCallback((
-    updater: (panels: ScopePanelDefinition[]) => ScopePanelDefinition[],
+    updater: (panels: PanelDefinition[]) => PanelDefinition[],
   ) => {
-    if (!layoutKey) return;
     setScopeLayouts((current) => {
-      const base = current[layoutKey]?.length ? current[layoutKey] : [defaultScope];
+      const base = current[layoutKey]?.length ? current[layoutKey] : scopePanels;
       return { ...current, [layoutKey]: updater(base) };
     });
-  }, [defaultScope, layoutKey]);
+  }, [layoutKey, scopePanels]);
+
+  const beginLayoutInteraction = useCallback((
+    event: React.PointerEvent<HTMLElement>,
+    panel: PanelDefinition,
+    kind: LayoutInteraction['kind'],
+  ) => {
+    if (window.innerWidth <= 920 || event.button !== 0) return;
+    const grid = gridRef.current;
+    if (!grid) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveScopeId(panel.id);
+    setChannelPickerScopeId(null);
+    layoutPreviewRef.current = scopePanels;
+    setLayoutPreview(scopePanels);
+    setLayoutInteraction({
+      kind,
+      panelId: panel.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: { ...panel.layout },
+      panels: scopePanels,
+      workspaceWidth: grid.getBoundingClientRect().width,
+    });
+  }, [scopePanels]);
+
+  useEffect(() => {
+    if (!layoutInteraction) return;
+    document.body.classList.add('layout-interacting');
+    document.body.dataset.layoutInteraction = layoutInteraction.kind;
+
+    const move = (event: PointerEvent) => {
+      const columnWidth = (
+        layoutInteraction.workspaceWidth - GRID_GAP * (GRID_COLUMNS - 1)
+      ) / GRID_COLUMNS;
+      const columnStep = Math.max(1, columnWidth + GRID_GAP);
+      const rowStep = GRID_ROW_HEIGHT + GRID_GAP;
+      const deltaColumns = Math.round((event.clientX - layoutInteraction.startX) / columnStep);
+      const deltaRows = Math.round((event.clientY - layoutInteraction.startY) / rowStep);
+      const origin = layoutInteraction.origin;
+      const next = layoutInteraction.kind === 'move'
+        ? {
+          ...origin,
+          x: Math.max(0, Math.min(GRID_COLUMNS - origin.width, origin.x + deltaColumns)),
+          y: Math.max(0, origin.y + deltaRows),
+        }
+        : {
+          ...origin,
+          width: Math.max(
+            MIN_PANEL_WIDTH,
+            Math.min(GRID_COLUMNS - origin.x, origin.width + deltaColumns),
+          ),
+          height: Math.max(MIN_PANEL_HEIGHT, origin.height + deltaRows),
+        };
+      const preview = placePanelWithoutOverlap(
+        layoutInteraction.panels,
+        layoutInteraction.panelId,
+        next,
+      );
+      layoutPreviewRef.current = preview;
+      setLayoutPreview(preview);
+    };
+
+    const finish = (commit: boolean) => {
+      const preview = layoutPreviewRef.current;
+      if (commit && preview) updateScopePanels(() => preview);
+      layoutPreviewRef.current = null;
+      setLayoutPreview(null);
+      setLayoutInteraction(null);
+    };
+    const pointerUp = () => finish(true);
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') finish(false);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', pointerUp, { once: true });
+    window.addEventListener('pointercancel', pointerUp, { once: true });
+    window.addEventListener('keydown', keyDown);
+    return () => {
+      document.body.classList.remove('layout-interacting');
+      delete document.body.dataset.layoutInteraction;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', pointerUp);
+      window.removeEventListener('pointercancel', pointerUp);
+      window.removeEventListener('keydown', keyDown);
+    };
+  }, [layoutInteraction, updateScopePanels]);
 
   const setScopeChannelKeys = useCallback((scopeId: string, channelKeys: string[]) => {
     updateScopePanels((panels) => panels.map((panel) => panel.id === scopeId
-      ? { ...panel, channelKeys: [...new Set(channelKeys)] }
+      ? {
+        ...panel,
+        channelKeys: [...new Set(channelKeys)],
+        ...(panel.type !== 'scope' ? { channelGroup: undefined } : {}),
+      }
       : panel));
   }, [updateScopePanels]);
+
+  const bindPanelGroup = useCallback((panelId: string, channelGroup: string) => {
+    updateScopePanels((panels) => panels.map((panel) => (
+      panel.id === panelId && panel.type !== 'scope'
+        ? { ...panel, channelGroup }
+        : panel
+    )));
+  }, [updateScopePanels]);
+
+  const updatePanel = useCallback((panelId: string, patch: Partial<PanelDefinition>) => {
+    updateScopePanels((panels) => panels.map((panel) => (
+      panel.id === panelId ? { ...panel, ...patch } as PanelDefinition : panel
+    )));
+  }, [updateScopePanels]);
+
+  const finishPanelTitleEdit = useCallback((panelId: string) => {
+    const title = panelTitleDraft.trim().slice(0, 120);
+    if (title) updatePanel(panelId, { title });
+    setEditingPanelTitleId(null);
+    setPanelTitleDraft('');
+  }, [panelTitleDraft, updatePanel]);
 
   const toggleScopeChannel = useCallback((scopeId: string, channelKey: string) => {
     updateScopePanels((panels) => panels.map((panel) => {
       if (panel.id !== scopeId) return panel;
-      const channelKeys = new Set(panel.channelKeys);
+      const channelKeys = new Set(effectivePanelChannelKeys(panel, channels));
       if (channelKeys.has(channelKey)) channelKeys.delete(channelKey);
       else channelKeys.add(channelKey);
-      return { ...panel, channelKeys: [...channelKeys] };
+      return {
+        ...panel,
+        channelKeys: [...channelKeys],
+        ...(panel.type !== 'scope' ? { channelGroup: undefined } : {}),
+      };
     }));
-  }, [updateScopePanels]);
+  }, [channels, updateScopePanels]);
 
-  const addScope = () => {
-    if (!layoutKey || scopePanels.length >= MAX_SCOPE_PANELS) return;
-    const panel: ScopePanelDefinition = {
+  const addPanel = (type: PanelType) => {
+    if (scopePanels.length >= MAX_PANELS) return;
+    const nextRow = scopePanels.reduce(
+      (bottom, panel) => Math.max(bottom, panel.layout.y + panel.layout.height),
+      0,
+    );
+    const base = {
       id: createScopeId(),
-      type: 'scope',
-      title: nextScopeTitle(scopePanels),
+      title: nextPanelTitle(scopePanels, type),
       channelKeys: [],
+      layout: { x: 0, y: nextRow, width: GRID_COLUMNS, height: type === 'indicators' ? 2 : 4 },
     };
+    const panel: PanelDefinition = type === 'value-bar'
+      ? {
+        ...base,
+        type,
+        rangeMode: 'auto',
+        manualMin: 0,
+        manualMax: 1,
+        channelRanges: {},
+      }
+      : type === 'indicators'
+        ? { ...base, type, stateColors: DEFAULT_STATE_COLORS.map((state) => ({ ...state })) }
+        : { ...base, type, autoY: true, windowSeconds: 10 };
     updateScopePanels((panels) => [...panels, panel]);
     setActiveScopeId(panel.id);
     setChannelPickerScopeId(panel.id);
+    setAddPanelMenuOpen(false);
   };
 
   const deleteScope = (scopeId: string) => {
@@ -560,6 +1105,59 @@ export default function App() {
   const clearHistory = () => {
     telemetry.clear();
     if (paused) setPausedAt(getViewTime());
+  };
+
+  const exportWorkspace = () => {
+    const sourceName = activeSource?.name ?? 'Offline template';
+    const config: WorkspaceConfigFile = {
+      schema: WORKSPACE_CONFIG_SCHEMA,
+      version: WORKSPACE_CONFIG_VERSION,
+      exportedAt: new Date().toISOString(),
+      sourceName,
+      panels: scopePanels,
+    };
+    const url = URL.createObjectURL(new Blob(
+      [JSON.stringify(config, null, 2)],
+      { type: 'application/json' },
+    ));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = workspaceFilename(sourceName);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setWorkspaceFeedback({
+      kind: 'success',
+      message: `Exported ${scopePanels.length} panel${scopePanels.length === 1 ? '' : 's'}.`,
+    });
+  };
+
+  const importWorkspace = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    if (file.size > MAX_WORKSPACE_FILE_BYTES) {
+      setWorkspaceFeedback({ kind: 'error', message: 'Workspace files must be smaller than 1 MB.' });
+      return;
+    }
+    try {
+      const config = parseWorkspaceConfig(JSON.parse(await file.text()) as unknown);
+      setScopeLayouts((current) => ({ ...current, [layoutKey]: config.panels }));
+      setActiveScopeId(config.panels[0]?.id ?? null);
+      setChannelPickerScopeId(null);
+      setLayoutPreview(null);
+      setWorkspaceFeedback({
+        kind: 'success',
+        message: `Imported ${config.panels.length} panel${config.panels.length === 1 ? '' : 's'} from ${file.name}.`,
+      });
+    } catch (error) {
+      setWorkspaceFeedback({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not import this workspace file.',
+      });
+    }
   };
 
   const addHub = (event: React.FormEvent<HTMLFormElement>) => {
@@ -661,44 +1259,48 @@ export default function App() {
             {connectionLabel}
           </span>
 
-          <button
-            className="control-button add-scope-button"
-            type="button"
-            onClick={addScope}
-            disabled={!layoutKey || scopePanels.length >= MAX_SCOPE_PANELS}
-            aria-label="Add scope"
-            title={scopePanels.length >= MAX_SCOPE_PANELS
-              ? `Up to ${MAX_SCOPE_PANELS} scopes are supported`
-              : 'Add an independent waveform panel'}
-          >
-            <Plus size={14} />
-            <span>Add scope</span>
-          </button>
-
-          <button
-            className={`control-button auto-y-button${autoY ? ' active' : ''}`}
-            type="button"
-            onClick={() => setAutoY((enabled) => !enabled)}
-            aria-label="Auto Y"
-            aria-pressed={autoY}
-            title="Disable to freeze the Y range; use Shift + wheel to zoom Y"
-          >
-            <Maximize size={14} />
-            <span>Auto Y</span>
-          </button>
-
-          <label className="window-control">
-            <span>Window</span>
-            <select
-              value={windowSeconds}
-              onChange={(event) => setWindowSeconds(Number(event.target.value))}
-              aria-label="Visible time window"
+          <div className="add-panel-control">
+            <button
+              className={`control-button add-scope-button${addPanelMenuOpen ? ' active' : ''}`}
+              type="button"
+              onClick={() => setAddPanelMenuOpen((open) => !open)}
+              disabled={scopePanels.length >= MAX_PANELS}
+              aria-label="Add panel"
+              aria-haspopup="menu"
+              aria-expanded={addPanelMenuOpen}
+              title={scopePanels.length >= MAX_PANELS
+                ? `Up to ${MAX_PANELS} panels are supported`
+                : 'Add a telemetry panel'}
             >
-              <option value={5}>5 s</option>
-              <option value={10}>10 s</option>
-              <option value={30}>30 s</option>
-            </select>
-          </label>
+              <Plus size={14} />
+              <span>Add panel</span>
+              <ChevronDown size={12} />
+            </button>
+            {addPanelMenuOpen && (
+              <>
+                <button
+                  className="add-panel-scrim"
+                  type="button"
+                  onClick={() => setAddPanelMenuOpen(false)}
+                  aria-label="Close panel menu"
+                />
+                <div className="add-panel-menu" role="menu" aria-label="Panel type">
+                  <button type="button" role="menuitem" onClick={() => addPanel('scope')}>
+                    <Activity size={15} />
+                    <span><strong>Waveform</strong><small>Signals over time</small></span>
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => addPanel('value-bar')}>
+                    <Gauge size={15} />
+                    <span><strong>Value bars</strong><small>Values within a range</small></span>
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => addPanel('indicators')}>
+                    <Radio size={15} />
+                    <span><strong>Indicators</strong><small>Boolean and enum states</small></span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
 
           <button
             className={`control-button pause-button${paused ? ' resume' : ''}`}
@@ -757,6 +1359,7 @@ export default function App() {
                   aria-label="Add Hub address"
                   aria-expanded={hubEditorOpen}
                   title="Connect to another DebugScope Hub"
+                  data-hub-editor-trigger
                 >
                   <Plus size={13} />
                 </button>
@@ -886,15 +1489,25 @@ export default function App() {
             )}
           </label>
 
-          {groupedChannels.map(([group, groupChannels]) => (
-            <div className="channel-group" key={group}>
-              <div className="group-label">
-                <ChevronDown size={14} />
+          {groupedChannels.map(([group, groupChannels], groupIndex) => {
+            const collapsed = !channelSearch.trim() && collapsedGroupsForSource.has(group);
+            const groupContentId = `channel-group-${groupIndex}`;
+            return (
+            <div className={`channel-group${collapsed ? ' collapsed' : ''}`} key={group}>
+              <button
+                className="group-label"
+                type="button"
+                onClick={() => toggleChannelGroup(group)}
+                aria-label={`${group} channel group`}
+                aria-expanded={!collapsed}
+                aria-controls={groupContentId}
+              >
+                <ChevronDown size={14} aria-hidden="true" />
                 <span>{group}</span>
                 <b>{groupChannels.length}</b>
-              </div>
+              </button>
 
-              <div className="channel-list">
+              {!collapsed && <div className="channel-list" id={groupContentId}>
                 {groupChannels.map((channel) => {
                   const channelIndex = channelIndexes.get(channel.id) ?? -1;
                   const visible = activeScopeChannelIds.has(channel.id);
@@ -951,9 +1564,10 @@ export default function App() {
                     </div>
                   );
                 })}
-              </div>
+              </div>}
             </div>
-          ))}
+            );
+          })}
 
           {filteredChannels.length === 0 && channelSearch && (
             <div className="no-channel-results">No matching channels</div>
@@ -1052,39 +1666,90 @@ export default function App() {
 
       <main className="workspace">
         <div
-          className={`scope-grid${scopePanels.length === 1 ? ' single' : ''}`}
-          style={scopePanels.length > 1
-            ? { gridTemplateRows: `repeat(${scopePanels.length}, minmax(300px, 1fr))` }
-            : undefined}
+          className="scope-grid"
+          ref={gridRef}
         >
-          {scopePanels.map((panel, panelIndex) => {
-            const panelChannelKeys = new Set(panel.channelKeys);
+          {displayedPanels.map((panel, panelIndex) => {
+            const panelChannelKeys = new Set(effectivePanelChannelKeys(panel, channels));
+            const panelChannels = channels.filter((channel) => panelChannelKeys.has(channel.key));
             const panelVisibleChannels = new Set(
-              channels
-                .filter((channel) => panelChannelKeys.has(channel.key))
-                .map((channel) => channel.id),
+              panelChannels.map((channel) => channel.id),
             );
             const panelIsActive = panel.id === activeScope?.id;
             const pickerOpen = panel.id === channelPickerScopeId;
 
             return (
               <section
-                className={`scope-panel${panelIsActive ? ' active' : ''}`}
+                className={`scope-panel${panelIsActive ? ' active' : ''}${
+                  layoutInteraction?.panelId === panel.id ? ` layout-${layoutInteraction.kind}` : ''
+                }`}
                 aria-label={panel.title}
                 key={panel.id}
                 onPointerDown={() => setActiveScopeId(panel.id)}
+                data-grid-x={panel.layout.x}
+                data-grid-y={panel.layout.y}
+                data-grid-width={panel.layout.width}
+                data-grid-height={panel.layout.height}
+                style={{
+                  gridColumn: `${panel.layout.x + 1} / span ${panel.layout.width}`,
+                  gridRow: `${panel.layout.y + 1} / span ${panel.layout.height}`,
+                }}
               >
                 <div className="plot-legend">
                   <button
-                    className="scope-identity"
+                    className="panel-drag-handle"
                     type="button"
-                    onClick={() => setActiveScopeId(panel.id)}
-                    aria-label={`Activate ${panel.title}`}
-                    aria-pressed={panelIsActive}
+                    onPointerDown={(event) => beginLayoutInteraction(event, panel, 'move')}
+                    aria-label={`Move ${panel.title}`}
+                    title="Drag to move panel"
                   >
-                    <span>{String(panelIndex + 1).padStart(2, '0')}</span>
-                    <strong>{panel.title}</strong>
+                    <GripVertical size={14} />
                   </button>
+                  <div className="scope-identity">
+                    <span>{String(panelIndex + 1).padStart(2, '0')}</span>
+                    <span className="scope-identity-copy">
+                      {editingPanelTitleId === panel.id ? (
+                        <input
+                          className="panel-title-input"
+                          type="text"
+                          value={panelTitleDraft}
+                          maxLength={120}
+                          autoFocus
+                          aria-label={`Rename ${panel.title}`}
+                          onFocus={(event) => event.currentTarget.select()}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onChange={(event) => setPanelTitleDraft(event.target.value)}
+                          onBlur={() => finishPanelTitleEdit(panel.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') event.currentTarget.blur();
+                            if (event.key === 'Escape') {
+                              event.preventDefault();
+                              setEditingPanelTitleId(null);
+                              setPanelTitleDraft('');
+                            }
+                          }}
+                        />
+                      ) : (
+                        <button
+                          className="panel-title-button"
+                          type="button"
+                          onClick={() => setActiveScopeId(panel.id)}
+                          onDoubleClick={(event) => {
+                            event.stopPropagation();
+                            setActiveScopeId(panel.id);
+                            setPanelTitleDraft(panel.title);
+                            setEditingPanelTitleId(panel.id);
+                          }}
+                          aria-label={`Activate ${panel.title}`}
+                          aria-pressed={panelIsActive}
+                          title="Double-click to rename"
+                        >
+                          {panel.title}
+                        </button>
+                      )}
+                      <small>{panelTypeLabel(panel.type)}</small>
+                    </span>
+                  </div>
 
                   <div className="scope-legend-scroll" aria-label={`${panel.title} channel legend`}>
                     {channels.filter((channel) => panelVisibleChannels.has(channel.id)).map((channel) => {
@@ -1119,6 +1784,34 @@ export default function App() {
                   </div>
 
                   <div className="scope-panel-actions">
+                    {panel.type === 'scope' && (
+                      <>
+                        <button
+                          className={`scope-action scope-auto-y${panel.autoY ? ' active' : ''}`}
+                          type="button"
+                          onClick={() => updatePanel(panel.id, { autoY: !panel.autoY })}
+                          aria-label={`Auto Y for ${panel.title}`}
+                          aria-pressed={panel.autoY}
+                          title="Auto Y · disable to keep the current Y range"
+                        >
+                          <Maximize size={13} />
+                          <span>Y</span>
+                        </button>
+                        <label className="scope-window-control" title="Visible time window">
+                          <select
+                            value={panel.windowSeconds}
+                            onChange={(event) => updatePanel(panel.id, {
+                              windowSeconds: Number(event.target.value),
+                            })}
+                            aria-label={`Visible time window for ${panel.title}`}
+                          >
+                            <option value={5}>5s</option>
+                            <option value={10}>10s</option>
+                            <option value={30}>30s</option>
+                          </select>
+                        </label>
+                      </>
+                    )}
                     <button
                       className={`scope-action${pickerOpen ? ' active' : ''}`}
                       type="button"
@@ -1127,6 +1820,7 @@ export default function App() {
                       aria-haspopup="dialog"
                       aria-expanded={pickerOpen}
                       title="Choose channels"
+                      data-channel-picker-trigger
                     >
                       <SlidersHorizontal size={14} />
                       <span>{panelVisibleChannels.size}</span>
@@ -1145,34 +1839,55 @@ export default function App() {
                   </div>
                 </div>
 
-                <WaveformPlot
-                  channels={channels}
-                  data={timeline.data}
-                  dataVersion={telemetry.version}
-                  visibleChannels={panelVisibleChannels}
-                  selectedChannel={panelIsActive ? selectedChannel : ''}
-                  windowSeconds={windowSeconds}
-                  pausedAt={pausedAt}
-                  autoY={autoY}
-                  theme={theme}
-                  scrollWhenIdle={settings.scrollWhenIdle}
-                  getClockTime={getViewTime}
-                  onShowAllChannels={() => setScopeChannelKeys(
-                    panel.id,
-                    channels.map((channel) => channel.key),
-                  )}
-                  onVisiblePointCount={(count) => setVisiblePointCounts((current) => (
-                    current[panel.id] === count ? current : { ...current, [panel.id]: count }
-                  ))}
-                  onRenderRate={(rate) => setRenderRates((current) => (
-                    current[panel.id] === rate ? current : { ...current, [panel.id]: rate }
-                  ))}
-                  emptyTitle={channels.length > 0 ? `No channels in ${panel.title}` : emptyTitle}
-                  emptyMessage={channels.length > 0
-                    ? 'Choose the signals this scope should display. Each scope keeps an independent Y range.'
-                    : emptyMessage}
-                  showEmptyAction={channels.length > 0}
-                />
+                {panel.type === 'scope' && (
+                  <WaveformPlot
+                    channels={channels}
+                    data={timeline.data}
+                    dataVersion={telemetry.version}
+                    visibleChannels={panelVisibleChannels}
+                    selectedChannel={panelIsActive ? selectedChannel : ''}
+                    windowSeconds={panel.windowSeconds}
+                    pausedAt={pausedAt}
+                    autoY={panel.autoY}
+                    theme={theme}
+                    scrollWhenIdle={settings.scrollWhenIdle}
+                    getClockTime={getViewTime}
+                    onShowAllChannels={() => setScopeChannelKeys(
+                      panel.id,
+                      channels.map((channel) => channel.key),
+                    )}
+                    onVisiblePointCount={(count) => setVisiblePointCounts((current) => (
+                      current[panel.id] === count ? current : { ...current, [panel.id]: count }
+                    ))}
+                    onRenderRate={(rate) => setRenderRates((current) => (
+                      current[panel.id] === rate ? current : { ...current, [panel.id]: rate }
+                    ))}
+                    emptyTitle={channels.length > 0 ? `No channels in ${panel.title}` : emptyTitle}
+                    emptyMessage={channels.length > 0
+                      ? 'Choose the signals this scope should display. Each scope keeps an independent Y range.'
+                      : emptyMessage}
+                    showEmptyAction={channels.length > 0}
+                  />
+                )}
+                {panel.type === 'value-bar' && (
+                  <ValueBarPanel
+                    panel={{ ...panel, channelKeys: [...panelChannelKeys] }}
+                    channels={channels}
+                    data={telemetry.data}
+                    latest={telemetry.latest}
+                    channelIndexes={channelIndexes}
+                    onChange={(patch) => updatePanel(panel.id, patch as Partial<PanelDefinition>)}
+                  />
+                )}
+                {panel.type === 'indicators' && (
+                  <IndicatorPanel
+                    panel={{ ...panel, channelKeys: [...panelChannelKeys] }}
+                    channels={channels}
+                    latest={telemetry.latest}
+                    channelIndexes={channelIndexes}
+                    onChange={(patch) => updatePanel(panel.id, patch as Partial<PanelDefinition>)}
+                  />
+                )}
 
                 {pickerOpen && (
                   <>
@@ -1217,6 +1932,26 @@ export default function App() {
                         </button>
                       </div>
 
+                      {panel.type !== 'scope' && numberedChannelGroups.length > 0 && (
+                        <div className="scope-picker-groups">
+                          <span>NUMBERED GROUPS</span>
+                          <div>
+                            {numberedChannelGroups.map(([groupName, groupChannels]) => (
+                              <button
+                                type="button"
+                                key={groupName}
+                                className={panel.channelGroup === groupName ? 'active' : ''}
+                                onClick={() => bindPanelGroup(panel.id, groupName)}
+                              >
+                                <Radio size={11} />
+                                {groupName}
+                                <b>{groupChannels.length}</b>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       <div className="scope-picker-list">
                         {channels.map((channel) => {
                           const checked = panelChannelKeys.has(channel.key);
@@ -1250,6 +1985,13 @@ export default function App() {
                     </div>
                   </>
                 )}
+                <button
+                  className="panel-resize-handle"
+                  type="button"
+                  onPointerDown={(event) => beginLayoutInteraction(event, panel, 'resize')}
+                  aria-label={`Resize ${panel.title}`}
+                  title="Drag to resize panel"
+                />
               </section>
             );
           })}
@@ -1331,9 +2073,50 @@ export default function App() {
               </div>
             </section>
 
+            <section className="settings-section workspace-settings" aria-labelledby="workspace-settings-title">
+              <div className="settings-section-heading">
+                <span id="workspace-settings-title">WORKSPACE</span>
+                <small>{activeSource?.name ?? 'Offline template'}</small>
+              </div>
+              <div className="settings-entry workspace-settings-entry">
+                <span className="settings-entry-copy">
+                  <strong>Portable panel configuration</strong>
+                  <small>
+                    Includes panel types, grid positions, channel bindings, ranges, and state colors.
+                  </small>
+                </span>
+                <div className="workspace-settings-actions">
+                  <button type="button" onClick={exportWorkspace}>
+                    <Download size={14} />
+                    <span>Export workspace</span>
+                  </button>
+                  <button type="button" onClick={() => workspaceFileRef.current?.click()}>
+                    <Upload size={14} />
+                    <span>Import workspace</span>
+                  </button>
+                  <input
+                    ref={workspaceFileRef}
+                    type="file"
+                    accept=".json,application/json"
+                    aria-label="Import workspace configuration"
+                    onChange={importWorkspace}
+                    hidden
+                  />
+                </div>
+                {workspaceFeedback && (
+                  <small
+                    className={`workspace-feedback ${workspaceFeedback.kind}`}
+                    role={workspaceFeedback.kind === 'error' ? 'alert' : 'status'}
+                  >
+                    {workspaceFeedback.message}
+                  </small>
+                )}
+              </div>
+            </section>
+
             <div className="settings-footer">
-              <span>Changes are saved automatically</span>
-              <small>Default: timeline stops with the last sample</small>
+              <span>Changes are saved automatically in this browser</span>
+              <small>Export a workspace to reuse it in another browser or machine</small>
             </div>
           </aside>
         </>

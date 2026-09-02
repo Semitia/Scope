@@ -29,7 +29,16 @@ function sampleModel(model: DemoModel, time: number): number[] {
   model.speed += (target - model.speed) * 0.025 + disturbance;
   model.estimate += (model.speed - model.estimate) * 0.17;
 
-  return [target, model.speed, model.estimate, target - model.speed];
+  const error = target - model.speed;
+  return [
+    target,
+    model.speed,
+    model.estimate,
+    error,
+    model.speed > 1_440 ? 1 : 0,
+    model.speed < 1_080 ? 1 : 0,
+    Math.abs(error) > 115 ? 1 : 0,
+  ];
 }
 
 function createSession(): DemoSession {

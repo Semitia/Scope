@@ -113,11 +113,18 @@ stay separate.
 
 ## Browser controls
 
-- add and remove independent Scope panels; a new Scope starts empty so its channels can be chosen deliberately;
+- add waveform, Value Bars, and Indicators panels; each panel keeps independent channel bindings and configuration;
+- prepare and persist the workspace even before a producer connects, then inherit it for newly discovered programs;
+- export or import a portable Workspace JSON containing panel types, grid positions, channel bindings, ranges, and indicator state colors;
+- drag panels on a 12-column desktop grid, resize them from the lower-right corner, and arrange side-by-side columns without overlap;
+- bind Value Bars to individual channels or a numbered channel group; click either endpoint value to set that bar's manual range, then use its center icon to restore/relearn the automatic history range;
+- bind Indicators to individual channels or numbered channel groups such as `limit.0..N`, with customizable colors and labels for boolean/enumerated states;
+- double-click a panel title to rename it; click outside any open picker/editor to dismiss it;
 - click a Scope to make it active, then toggle that Scope's channels in the left sidebar or use its channel picker;
-- keep a separate channel set and automatically calculated Y range for every Scope;
+- keep a separate channel set, Auto Y mode, automatically calculated Y range, and visible time window for every waveform Scope;
 - save the Scope layout per stable program identity across browser reloads;
 - select a source and browse its channels in the left sidebar;
+- collapse sidebar channel groups independently for each program; filtering temporarily expands matching groups without discarding the saved state;
 - add remote Hub addresses manually and browse programs from multiple Hubs in one workbench;
 - delete stopped programs and their in-memory history;
 - customize each channel's color, smooth/linear/stepped curve, previewed solid/dashed/dotted/dash-dot stroke, and width;
@@ -137,7 +144,9 @@ Use the `+` button beside **PROGRAMS** to add another Hub. Addresses such as
 are accepted and saved in the browser. The Browser connects to the Hub's
 WebSocket endpoint; UDP producers still send to that Hub's UDP address and port.
 
-Multiple Scopes use a waveform-first vertical layout. One Scope fills the workspace; additional Scopes are stacked at a readable minimum height and the workspace scrolls when necessary. Freeform drag/resizing and other panel types are intentionally deferred until this basic panel model has been exercised in real debugging sessions.
+Panels use a persistent 12-column desktop grid. Drag the grip in a panel header to move it, double-click its title to rename it, and use the lower-right handle to resize it; panels snap to the grid and push colliding panels downward. Narrow browser windows automatically switch to a readable single-column layout while preserving the saved desktop arrangement.
+
+Open **Settings → Workspace** to export the current program layout or offline template as a `.workspace.json` file. Importing a file replaces the current workspace after validating its schema and panel definitions; it does not change the telemetry protocol or require a connected producer.
 
 ## VS Code preview
 

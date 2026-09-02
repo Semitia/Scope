@@ -52,6 +52,10 @@ test('Python SDK streams through UDP and Hub into the browser workbench', async 
   await expect(page.getByText('Hub connected', { exact: true })).toBeVisible();
   await expect(page.getByText('Waiting for a producer')).toBeVisible();
 
+  await page.getByRole('button', { name: 'Add panel' }).click();
+  await page.getByRole('menuitem', { name: /Value bars/ }).click();
+  await page.getByRole('button', { name: 'Close channels for Value Bars 1' }).click();
+
   const producer = runLiveProducer();
   await expect(page.locator('.source-card strong').getByText('live-python', { exact: true })).toBeVisible({
     timeout: 10_000,
@@ -61,6 +65,7 @@ test('Python SDK streams through UDP and Hub into the browser workbench', async 
   await expect(page.locator('.channel-row')).toHaveCount(4);
   await expect(page.locator('.legend-item')).toHaveCount(4);
   await expect(page.locator('.uplot')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Value Bars 1' })).toBeVisible();
   await producer;
   await page.waitForTimeout(150);
 
