@@ -1,0 +1,289 @@
+:root {
+  color-scheme: light dark;
+  --font-ui: var(--vscode-font-family, system-ui, sans-serif);
+  --font-mono: var(--vscode-editor-font-family, monospace);
+  --bg-canvas: var(--vscode-panel-background, var(--vscode-editor-background));
+  --bg-plot: var(--vscode-editor-background);
+  --bg-control: var(--vscode-dropdown-background);
+  --bg-elevated: var(--vscode-editorWidget-background);
+  --border-subtle: var(--vscode-panel-border, var(--vscode-widget-border));
+  --border-strong: var(--vscode-focusBorder);
+  --text-primary: var(--vscode-foreground);
+  --text-secondary: var(--vscode-descriptionForeground);
+  --text-muted: var(--vscode-disabledForeground);
+  --accent: var(--vscode-textLink-foreground);
+  --live: var(--vscode-testing-iconPassed, #3fb950);
+  --danger: var(--vscode-errorForeground, #f85149);
+  --shadow-color: rgba(0, 0, 0, 0.22);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  color: var(--text-primary);
+  background: var(--bg-canvas);
+  font: var(--vscode-font-size, 13px)/1.35 var(--font-ui);
+}
+
+button,
+select {
+  color: inherit;
+  font: inherit;
+}
+
+button:focus-visible,
+select:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.compact-scope {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  grid-template-rows: 34px minmax(0, 1fr) 31px;
+  background: var(--bg-canvas);
+}
+
+.compact-toolbar {
+  z-index: 20;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.connection-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+}
+
+.connection-state i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.connection-state.connected i {
+  background: var(--live);
+}
+
+.connection-state.error,
+.connection-state.error i {
+  color: var(--danger);
+  background: var(--danger);
+}
+
+.source-select,
+.window-select {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.source-select {
+  flex: 1 1 220px;
+  max-width: 320px;
+}
+
+.source-select select {
+  min-width: 80px;
+  max-width: 220px;
+}
+
+select,
+.toolbar-actions button {
+  height: 25px;
+  border: 1px solid var(--vscode-dropdown-border, var(--border-subtle));
+  border-radius: 2px;
+  background: var(--bg-control);
+}
+
+select {
+  padding: 0 22px 0 6px;
+}
+
+.toolbar-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.toolbar-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  cursor: pointer;
+}
+
+.toolbar-actions button:hover,
+.channel-strip button:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.compact-plot {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.compact-plot .plot-stage {
+  width: 100%;
+  height: 100%;
+}
+
+.channel-strip {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  gap: 2px;
+  padding: 3px 6px;
+  overflow-x: auto;
+  border-top: 1px solid var(--border-subtle);
+  scrollbar-width: thin;
+}
+
+.channel-strip button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  font-size: 10px;
+}
+
+.channel-strip button > i {
+  width: 13px;
+  border-top: 2px solid var(--trace);
+  opacity: 0.35;
+}
+
+.channel-strip button.visible {
+  color: var(--text-primary);
+}
+
+.channel-strip button.visible > i {
+  opacity: 1;
+}
+
+.channel-strip button.selected {
+  border-color: var(--vscode-focusBorder);
+}
+
+.channel-strip b {
+  color: var(--text-secondary);
+  font: 10px/1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.channel-placeholder {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.empty-plot {
+  padding: 12px;
+}
+
+.empty-plot-icon {
+  width: 32px;
+  height: 32px;
+  margin-bottom: 6px;
+}
+
+.empty-plot p {
+  margin: 3px 0 7px;
+}
+
+@media (max-width: 720px) {
+  .source-select > span,
+  .window-select > span,
+  .toolbar-actions button > span {
+    display: none;
+  }
+
+  .source-select {
+    max-width: 190px;
+  }
+
+  .toolbar-actions button {
+    width: 26px;
+    justify-content: center;
+    padding: 0;
+  }
+}
+
+@media (max-height: 180px) {
+  .compact-scope {
+    grid-template-rows: 28px minmax(0, 1fr);
+  }
+
+  .channel-strip,
+  .source-select > span,
+  .window-select,
+  .toolbar-actions button > span {
+    display: none;
+  }
+
+  .compact-toolbar {
+    padding-block: 1px;
+  }
+
+  .toolbar-actions button {
+    width: 24px;
+    height: 23px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .empty-plot-icon,
+  .empty-plot p {
+    display: none;
+  }
+}
+
+@media (max-width: 400px) {
+  .connection-state {
+    max-width: 18px;
+    overflow: hidden;
+    color: transparent;
+  }
+
+  .source-select select {
+    max-width: 120px;
+  }
+}

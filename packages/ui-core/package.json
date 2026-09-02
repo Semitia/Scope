@@ -1,0 +1,24 @@
+{
+  "name": "@debugscope/ui-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./plot.css": "./src/plot.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit --pretty false"
+  },
+  "peerDependencies": {
+    "react": "^19.2.8",
+    "uplot": "^1.6.32"
+  },
+  "dependencies": {
+    "lucide-react": "^1.38.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "typescript": "^7.0.2"
+  }
+}

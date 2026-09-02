@@ -4,15 +4,17 @@
   "private": true,
   "workspaces": [
     "apps/browser",
-    "packages/hub"
+    "apps/vscode",
+    "packages/hub",
+    "packages/ui-core"
   ],
   "scripts": {
     "dev": "concurrently -k -n hub,web -c cyan,blue \"npm run dev:hub\" \"npm run dev:browser\"",
     "dev:hub": "npm run dev --workspace @debugscope/hub",
     "dev:browser": "npm run dev --workspace @debugscope/browser",
     "start": "npm run build && npm run start --workspace @debugscope/hub",
-    "build": "npm run build --workspace @debugscope/hub && npm run build --workspace @debugscope/browser",
-    "typecheck": "npm run typecheck --workspace @debugscope/hub && npm run typecheck --workspace @debugscope/browser",
+    "build": "npm run build --workspace @debugscope/hub && npm run typecheck --workspace @debugscope/ui-core && npm run build --workspace @debugscope/browser && npm run build --workspace debugscope-vscode",
+    "typecheck": "npm run typecheck --workspace @debugscope/hub && npm run typecheck --workspace @debugscope/ui-core && npm run typecheck --workspace @debugscope/browser && npm run typecheck --workspace debugscope-vscode",
     "test:e2e": "npm run test:e2e --workspace @debugscope/browser",
     "test:e2e:live": "playwright test --config playwright.live.config.ts",
     "test:hub": "npm test --workspace @debugscope/hub",

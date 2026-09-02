@@ -1,0 +1,110 @@
+{
+  "name": "debugscope-vscode",
+  "displayName": "DebugScope",
+  "description": "A compact software oscilloscope in the VS Code Bottom Panel.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "debugscope",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Semitia/Scope.git"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["Visualization", "Debuggers"],
+  "main": "./dist/extension.js",
+  "files": ["dist", "media", "README.md", "LICENSE"],
+  "scripts": {
+    "build:webview": "vite build",
+    "build:extension": "tsup --config tsup.config.mts",
+    "copy:browser": "node scripts/copy-browser.mjs",
+    "build": "npm run typecheck && npm run build:webview && npm run build:extension && npm run copy:browser",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false && tsc -p tsconfig.extension.json --noEmit --pretty false"
+  },
+  "devDependencies": {
+    "@debugscope/ui-core": "0.1.0",
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@types/vscode": "^1.95.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "lucide-react": "^1.38.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "uplot": "^1.6.32",
+    "vite": "^8.2.2",
+    "ws": "^8.21.3"
+  },
+  "activationEvents": ["onView:debugscope.scope"],
+  "contributes": {
+    "commands": [
+      {
+        "command": "debugscope.openBrowser",
+        "title": "DebugScope: Open in Browser",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "debugscope.restartHub",
+        "title": "DebugScope: Restart Hub",
+        "icon": "$(debug-restart)"
+      }
+    ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "debugscope",
+          "title": "DebugScope",
+          "icon": "media/debugscope.svg"
+        }
+      ]
+    },
+    "views": {
+      "debugscope": [
+        {
+          "type": "webview",
+          "id": "debugscope.scope",
+          "name": "Scope",
+          "icon": "media/debugscope.svg",
+          "contextualTitle": "DebugScope"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "debugscope.openBrowser",
+          "when": "view == debugscope.scope",
+          "group": "navigation@1"
+        },
+        {
+          "command": "debugscope.restartHub",
+          "when": "view == debugscope.scope",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DebugScope",
+      "properties": {
+        "debugscope.udpPort": {
+          "type": "number",
+          "default": 4711,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Local UDP port used by DebugScope producers."
+        },
+        "debugscope.httpPort": {
+          "type": "number",
+          "default": 4712,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Local HTTP and WebSocket port used by the DebugScope Hub."
+        }
+      }
+    }
+  }
+}

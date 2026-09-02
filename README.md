@@ -1,11 +1,11 @@
 # DebugScope
 
-DebugScope is a browser-first software oscilloscope for live program variables. C, C++, Python, Rust, and MATLAB applications emit small DSCP/1 UDP packets; the local Hub keeps recent history and streams it to the browser over WebSocket.
+DebugScope is a browser-first software oscilloscope for live program variables. C, C++, Python, Rust, and MATLAB applications emit small DSCP/1 UDP packets; the local Hub keeps recent history and streams it to the browser or the VS Code Bottom Panel over WebSocket.
 
-The repository currently contains a working v0.1 preview: the Hub, polished browser workbench, five producer SDKs, protocol documentation, and automated tests are all usable. The optional VS Code companion remains future work.
+The repository currently contains a working v0.1 preview: the Hub, polished browser workbench, five producer SDKs, protocol documentation, and automated tests are all usable. An initial VS Code companion is also available for local development.
 
 ```text
-C / C++ / Python / Rust / MATLAB SDK  →  UDP :4711  →  DebugScope Hub  →  WebSocket  →  Browser
+C / C++ / Python / Rust / MATLAB SDK  →  UDP :4711  →  DebugScope Hub  →  Browser / VS Code
 ```
 
 ## Start
@@ -139,6 +139,19 @@ WebSocket endpoint; UDP producers still send to that Hub's UDP address and port.
 
 Multiple Scopes use a waveform-first vertical layout. One Scope fills the workspace; additional Scopes are stacked at a readable minimum height and the workspace scrolls when necessary. Freeform drag/resizing and other panel types are intentionally deferred until this basic panel model has been exercised in real debugging sessions.
 
+## VS Code preview
+
+Build the repository, then launch an Extension Development Host from the repository root:
+
+```bash
+npm run build
+code --extensionDevelopmentPath="$PWD/apps/vscode"
+```
+
+Open **DebugScope** in the Bottom Panel. The extension attaches to an existing local Hub or starts one using the `debugscope.udpPort` and `debugscope.httpPort` settings. The compact panel provides source selection, channel toggles, Pause, Clear, history-window selection, and **Open in Browser**. The richer multi-Scope and channel-style controls remain browser-only.
+
+The current extension preview targets local desktop extension hosts. Remote SSH, WSL, Dev Containers, automated Extension Host coverage, and Marketplace publishing remain follow-up work.
+
 ### Timeline behavior
 
 The default **sample-time** mode treats an input pause as a paused clock. When the producer resumes, new samples continue immediately after the previous batch without an artificial time gap.
@@ -150,7 +163,9 @@ Enable **Continue scrolling when idle** in Settings to use real time instead. Th
 | Path | Purpose |
 |---|---|
 | `apps/browser` | React/Vite waveform workbench |
+| `apps/vscode` | VS Code Bottom Panel extension and compact React webview |
 | `packages/hub` | UDP receiver, history store, HTTP server, and WebSocket bridge |
+| `packages/ui-core` | Shared telemetry model, Hub client, timeline, and waveform plot |
 | `sdk` | Independent C, C++, Python, Rust, and MATLAB producers |
 | `docs/protocol.md` | Frozen DSCP/1 wire format |
 | `tests` | Cross-language fixtures and live end-to-end coverage |

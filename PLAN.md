@@ -1,7 +1,7 @@
 # DebugScope Development Plan
 
-> - **Status:** Working v0.1 browser-first vertical slice
-> - **Target:** browser application first + optional VS Code companion
+> - **Status:** Working v0.1 browser application + initial VS Code companion preview
+> - **Target:** browser application first + compact VS Code Bottom Panel
 > - **Producer languages:** C / C++ / Python / Rust / MATLAB
 > - **Transport:** UDP on localhost
 > - **UI transport:** WebSocket
@@ -19,11 +19,12 @@ The repository now contains the complete browser-first vertical slice that this 
 - independent C and C++ SDKs plus Python, Rust, and MATLAB SDKs;
 - a responsive light/dark browser workbench with source deletion, multiple independent Scope panels, per-Scope channel binding and Y ranges, Auto Y, zoom/pan, pause/clear, cursor readout, channel colors and line styles, and persistent per-program layouts/settings;
 - sample-time and real-time timeline modes, including disconnected blank regions across real input gaps;
+- a shared React/uPlot UI core plus an initial VS Code Bottom Panel with Hub discovery/start, source and channel selection, compact waveform monitoring, pause/clear, history windows, and Open in Browser;
 - Hub, protocol, SDK compatibility, browser interaction, timeline, and live end-to-end tests.
 
 Still deferred:
 
-- the optional VS Code Bottom Panel companion;
+- automated VS Code Extension Host coverage, Remote SSH/WSL/Dev Container support, and Marketplace publishing;
 - freeform/resizable panel layout, record/replay, export, advanced cursors, and additional plot types;
 - automated MATLAB runtime coverage and a broader cross-platform CI matrix;
 - public package publishing and formal v0.1 release packaging.
@@ -1304,6 +1305,12 @@ Do not overfill the panel.
 
 This scope is intentionally secondary. The first browser release should stand on its own without requiring the extension.
 
+## 40.1 Implemented preview baseline
+
+The repository now contains `apps/vscode`, which contributes a single Webview View to a dedicated Bottom Panel container. It reuses `packages/ui-core` for telemetry state, timeline preparation, and uPlot rendering. The extension attaches to an existing local Hub or starts an owned Hub in the Extension Host, serves the packaged browser workbench from that Hub, and exposes concise source, channel, Pause/Clear, history-window, and Open in Browser controls.
+
+This preview intentionally targets local desktop use. Extension Host automation, Remote SSH/WSL/Dev Container lifecycle semantics, Marketplace metadata, and release signing remain before a public extension release.
+
 ---
 
 # 41. Responsive VS Code Layout
@@ -1619,6 +1626,8 @@ Full layout shell
 ```
 
 Shared core, different composition.
+
+The initial shared core is now implemented in `packages/ui-core`. Browser-specific workbench composition remains in `apps/browser`; the compact VS Code composition remains in `apps/vscode/webview`.
 
 ---
 
@@ -2180,6 +2189,8 @@ Also complete the browser visual system and quality baseline:
 ---
 
 ## Milestone 4 — VS Code Panel (Optional / Non-blocking)
+
+**Status:** initial local-development preview implemented; extension-host hardening and public packaging remain.
 
 Implement:
 
