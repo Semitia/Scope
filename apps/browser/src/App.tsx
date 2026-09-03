@@ -7,7 +7,6 @@ import {
   Eye,
   EyeOff,
   Gauge,
-  Maximize,
   Menu,
   Moon,
   Palette,
@@ -47,6 +46,7 @@ import type {
   LineCurve,
   LinePattern,
   ThemeMode,
+  YScaleMode,
 } from './types';
 
 interface StoredChannelStyle {
@@ -72,6 +72,9 @@ const MIN_INDICATOR_PANEL_WIDTH = 2;
 const MIN_INDICATOR_PANEL_HEIGHT = 1;
 const MIN_WINDOW_SECONDS = 0.1;
 const MAX_WINDOW_SECONDS = 3_600;
+const DEFAULT_SIDEBAR_WIDTH = 252;
+const MIN_SIDEBAR_WIDTH = 220;
+const MAX_SIDEBAR_WIDTH = 480;
 const WORKSPACE_CONFIG_SCHEMA = 'debugscope.workspace';
 const WORKSPACE_CONFIG_VERSION = 1;
 const MAX_WORKSPACE_FILE_BYTES = 1024 * 1024;
@@ -79,6 +82,7 @@ const MAX_WORKSPACE_FILE_BYTES = 1024 * 1024;
 interface UserSettings {
   scrollWhenIdle: boolean;
   fontScale: number;
+  sidebarWidth: number;
 }
 
 type ScopeLayouts = Record<string, PanelDefinition[]>;
@@ -91,6 +95,12 @@ interface LayoutInteraction {
   origin: PanelGridLayout;
   panels: PanelDefinition[];
   workspaceWidth: number;
+}
+
+interface SidebarResizeInteraction {
+  pointerId: number;
+  startX: number;
+  startWidth: number;
 }
 
 interface WorkspaceConfigFile {
@@ -122,6 +132,33 @@ const PATTERN_OPTIONS: ReadonlyArray<{ value: LinePattern; label: string }> = [
   { value: 'dashed', label: 'Dashed' },
   { value: 'dotted', label: 'Dotted' },
   { value: 'dashdot', label: 'Dash-dot' },
+];
+
+const Y_SCALE_OPTIONS: ReadonlyArray<{
+  value: YScaleMode;
+  label: string;
+  title: string;
+}> = [
+  {
+    value: 'fit',
+    label: 'Fit Data',
+    title: 'Automatically fit both Y-axis bounds to data in the current time window',
+  },
+  {
+    value: 'zero-min',
+    label: '0 to Max',
+    title: 'Keep the lower bound at 0 and automatically follow the data maximum',
+  },
+  {
+    value: 'zero-max',
+    label: 'Min to 0',
+    title: 'Keep the upper bound at 0 and automatically follow the data minimum',
+  },
+  {
+    value: 'manual',
+    label: 'Manual',
+    title: 'Manual Y: wheel to zoom Y · drag to pan · Shift+wheel to zoom X · double-click to fit data',
+  },
 ];
 
 interface StylePreviewProps {
@@ -389,9 +426,12 @@ function initialSettings(): UserSettings {
     const fontScale = typeof stored.fontScale === 'number' && Number.isFinite(stored.fontScale)
       ? Math.min(1.4, Math.max(0.8, stored.fontScale))
       : 1;
-    return { scrollWhenIdle: stored.scrollWhenIdle === true, fontScale };
+    const sidebarWidth = typeof stored.sidebarWidth === 'number' && Number.isFinite(stored.sidebarWidth)
+      ? Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, stored.sidebarWidth))
+      : DEFAULT_SIDEBAR_WIDTH;
+    return { scrollWhenIdle: stored.scrollWhenIdle === true, fontScale, sidebarWidth };
   } catch {
-    return { scrollWhenIdle: false, fontScale: 1 };
+    return { scrollWhenIdle: false, fontScale: 1, sidebarWidth: DEFAULT_SIDEBAR_WIDTH };
   }
 }
 
@@ -639,6 +679,13 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
     if (strict && panel.autoY !== undefined && typeof panel.autoY !== 'boolean') {
       fail(`Waveform panel ${panelIndex + 1} has an invalid Auto Y setting.`);
     }
+    const validYScaleMode = panel.yScaleMode === 'fit'
+      || panel.yScaleMode === 'zero-min'
+      || panel.yScaleMode === 'zero-max'
+      || panel.yScaleMode === 'manual';
+    if (strict && panel.yScaleMode !== undefined && !validYScaleMode) {
+      fail(`Waveform panel ${panelIndex + 1} has an invalid Y-axis mode.`);
+    }
     if (strict && panel.windowMode !== undefined && panel.windowMode !== 'auto' && panel.windowMode !== 'manual') {
       fail(`Waveform panel ${panelIndex + 1} has an invalid time window mode.`);
     }
@@ -656,7 +703,9 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
     panels.push({
       ...base,
       type: 'scope',
-      autoY: panel.autoY !== false,
+      yScaleMode: validYScaleMode
+        ? panel.yScaleMode as YScaleMode
+        : panel.autoY === false ? 'manual' : 'fit',
       windowMode: panel.windowMode === 'auto' ? 'auto' : 'manual',
       windowSeconds: storedWindowSeconds,
     });
@@ -773,6 +822,7 @@ export default function App() {
   const gridRef = useRef<HTMLDivElement>(null);
   const layoutPreviewRef = useRef<PanelDefinition[] | null>(null);
   const workspaceFileRef = useRef<HTMLInputElement>(null);
+  const sidebarResizeRef = useRef<SidebarResizeInteraction | null>(null);
 
   const sourceKeys = useMemo(
     () => new Map(telemetry.sources.map((source) => [source.id, source.programKey])),
@@ -796,7 +846,7 @@ export default function App() {
     title: 'Scope 1',
     channelKeys: channels.slice(0, 4).map((channel) => channel.key),
     layout: defaultPanelLayout(0, true),
-    autoY: true,
+    yScaleMode: 'fit',
     windowMode: 'auto',
     windowSeconds: 10,
   }), [channelIdentity, layoutKey]);
@@ -1219,7 +1269,7 @@ export default function App() {
       }
       : type === 'indicators'
         ? { ...base, type, stateColors: DEFAULT_STATE_COLORS.map((state) => ({ ...state })) }
-        : { ...base, type, autoY: true, windowMode: 'auto', windowSeconds: 10 };
+        : { ...base, type, yScaleMode: 'fit', windowMode: 'auto', windowSeconds: 10 };
     updateScopePanels((panels) => [...panels, panel]);
     setActiveScopeId(panel.id);
     setChannelPickerScopeId(panel.id);
@@ -1375,8 +1425,57 @@ export default function App() {
         ? 'The source is connected. Send its first sample to create a channel.'
         : 'Enable a channel from the sidebar to start plotting.';
 
+  const setSidebarWidth = (width: number) => {
+    const nextWidth = Math.round(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width)));
+    setSettings((current) => current.sidebarWidth === nextWidth
+      ? current
+      : { ...current, sidebarWidth: nextWidth });
+  };
+
+  const startSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    sidebarResizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: settings.sidebarWidth,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.documentElement.classList.add('sidebar-resizing');
+  };
+
+  const moveSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    const resize = sidebarResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    setSidebarWidth(resize.startWidth + event.clientX - resize.startX);
+  };
+
+  const stopSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    const resize = sidebarResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    sidebarResizeRef.current = null;
+    document.documentElement.classList.remove('sidebar-resizing');
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const resizeSidebarWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    let nextWidth = settings.sidebarWidth;
+    if (event.key === 'ArrowLeft') nextWidth -= 12;
+    else if (event.key === 'ArrowRight') nextWidth += 12;
+    else if (event.key === 'Home') nextWidth = MIN_SIDEBAR_WIDTH;
+    else if (event.key === 'End') nextWidth = MAX_SIDEBAR_WIDTH;
+    else return;
+    event.preventDefault();
+    setSidebarWidth(nextWidth);
+  };
+
   return (
-    <div className={`app-shell${sidebarOpen ? ' sidebar-open' : ''}`}>
+    <div
+      className={`app-shell${sidebarOpen ? ' sidebar-open' : ''}`}
+      style={{ '--sidebar-width': `${settings.sidebarWidth}px` } as React.CSSProperties}
+    >
       <header className="app-bar">
         <div className="brand-block">
           <span className="brand-mark" aria-hidden="true">
@@ -1809,6 +1908,25 @@ export default function App() {
             <small>Recent history stays in memory</small>
           </span>
         </div>
+
+        <div
+          className="sidebar-resize-handle"
+          role="separator"
+          tabIndex={0}
+          aria-label="Resize sidebar"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_SIDEBAR_WIDTH}
+          aria-valuemax={MAX_SIDEBAR_WIDTH}
+          aria-valuenow={settings.sidebarWidth}
+          title="Drag to resize sidebar · double-click to reset"
+          onPointerDown={startSidebarResize}
+          onPointerMove={moveSidebarResize}
+          onPointerUp={stopSidebarResize}
+          onPointerCancel={stopSidebarResize}
+          onLostPointerCapture={stopSidebarResize}
+          onKeyDown={resizeSidebarWithKeyboard}
+          onDoubleClick={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
+        />
       </aside>
 
       <button
@@ -1940,17 +2058,23 @@ export default function App() {
                   <div className="scope-panel-actions">
                     {panel.type === 'scope' && (
                       <>
-                        <button
-                          className={`scope-action scope-auto-y${panel.autoY ? ' active' : ''}`}
-                          type="button"
-                          onClick={() => updatePanel(panel.id, { autoY: !panel.autoY })}
-                          aria-label={`Auto Y for ${panel.title}`}
-                          aria-pressed={panel.autoY}
-                          title="Auto Y · disable to keep the current Y range"
+                        <label
+                          className={`scope-y-control mode-${panel.yScaleMode}`}
+                          title={Y_SCALE_OPTIONS.find((option) => option.value === panel.yScaleMode)?.title}
                         >
-                          <Maximize size={13} />
-                          <span>Y</span>
-                        </button>
+                          <span aria-hidden="true">Y</span>
+                          <select
+                            value={panel.yScaleMode}
+                            onChange={(event) => updatePanel(panel.id, {
+                              yScaleMode: event.target.value as YScaleMode,
+                            })}
+                            aria-label={`Y axis mode for ${panel.title}`}
+                          >
+                            {Y_SCALE_OPTIONS.map((option) => (
+                              <option value={option.value} key={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
                         <TimeWindowControl
                           panel={panel}
                           automaticSeconds={sampling.suggestedWindowSeconds}
@@ -2011,7 +2135,7 @@ export default function App() {
                       ? sampling.suggestedWindowSeconds
                       : panel.windowSeconds}
                     pausedAt={pausedAt}
-                    autoY={panel.autoY}
+                    yScaleMode={panel.yScaleMode}
                     theme={theme}
                     fontScale={settings.fontScale}
                     scrollWhenIdle={settings.scrollWhenIdle}

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Eye, Radio, Waves } from 'lucide-react';
 import uPlot, { type AlignedData, type Options } from 'uplot';
-import type { ChannelDefinition, TelemetryData, ThemeMode } from './types';
+import type { ChannelDefinition, TelemetryData, ThemeMode, YScaleMode } from './types';
 
 interface HoverState {
   left: number;
@@ -16,7 +16,7 @@ interface WaveformPlotProps {
   selectedChannel: string;
   windowSeconds: number;
   pausedAt: number | null;
-  autoY: boolean;
+  yScaleMode: YScaleMode;
   theme: ThemeMode;
   fontScale?: number;
   scrollWhenIdle: boolean;
@@ -39,6 +39,22 @@ function formatAxisValue(value: number): string {
   return value.toFixed(2);
 }
 
+function fittedYScale(mode: Exclude<YScaleMode, 'manual'>, minY: number, maxY: number) {
+  if (mode === 'zero-min') {
+    const upper = Math.max(0, maxY);
+    const padding = Math.max(upper * 0.12, 0.01);
+    return { min: 0, max: upper + padding };
+  }
+  if (mode === 'zero-max') {
+    const lower = Math.min(0, minY);
+    const padding = Math.max(Math.abs(lower) * 0.12, 0.01);
+    return { min: lower - padding, max: 0 };
+  }
+  const rawRange = maxY - minY;
+  const padding = Math.max(rawRange * 0.12, Math.abs(maxY) * 0.02, 0.01);
+  return { min: minY - padding, max: maxY + padding };
+}
+
 export function WaveformPlot({
   channels,
   data,
@@ -47,7 +63,7 @@ export function WaveformPlot({
   selectedChannel,
   windowSeconds,
   pausedAt,
-  autoY,
+  yScaleMode,
   theme,
   fontScale = 1,
   scrollWhenIdle,
@@ -67,17 +83,26 @@ export function WaveformPlot({
   const visibleChannelsRef = useRef(visibleChannels);
   const windowSecondsRef = useRef(windowSeconds);
   const pausedAtRef = useRef(pausedAt);
-  const autoYRef = useRef(autoY);
+  const yScaleModeRef = useRef(yScaleMode);
   const scrollWhenIdleRef = useRef(scrollWhenIdle);
   const getClockTimeRef = useRef(getClockTime);
   const onVisiblePointCountRef = useRef(onVisiblePointCount);
   const onRenderRateRef = useRef(onRenderRate);
   const latestTimeRef = useRef(0);
   const followingRef = useRef(true);
-  const dragRef = useRef<{ startX: number; min: number; max: number } | null>(null);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    manualY: boolean;
+  } | null>(null);
   const renderCounterRef = useRef({ count: 0, since: performance.now() });
   const lastMetricsAtRef = useRef(0);
   const yScaleRef = useRef<{ min: number; max: number } | null>(null);
+  const fitManualYRef = useRef(false);
   const refreshViewRef = useRef<(liveEnd: number, forceMetrics?: boolean) => void>(() => {});
   const [hover, setHover] = useState<HoverState | null>(null);
   const [isFollowing, setIsFollowing] = useState(true);
@@ -87,7 +112,7 @@ export function WaveformPlot({
   visibleChannelsRef.current = visibleChannels;
   windowSecondsRef.current = windowSeconds;
   pausedAtRef.current = pausedAt;
-  autoYRef.current = autoY;
+  yScaleModeRef.current = yScaleMode;
   scrollWhenIdleRef.current = scrollWhenIdle;
   getClockTimeRef.current = getClockTime;
   onVisiblePointCountRef.current = onVisiblePointCount;
@@ -178,12 +203,21 @@ export function WaveformPlot({
     }
 
     onVisiblePointCountRef.current(visibleSamples * currentVisibleChannels.size);
-    if (autoYRef.current && Number.isFinite(minY) && Number.isFinite(maxY)) {
-      const rawRange = maxY - minY;
-      const padding = Math.max(rawRange * 0.12, Math.abs(maxY) * 0.02, 0.01);
-      const nextScale = { min: minY - padding, max: maxY + padding };
+    const currentYScaleMode = yScaleModeRef.current;
+    const fitManualY = fitManualYRef.current;
+    if ((currentYScaleMode !== 'manual' || fitManualY) && Number.isFinite(minY) && Number.isFinite(maxY)) {
+      const nextScale = fittedYScale(
+        currentYScaleMode === 'manual' ? 'fit' : currentYScaleMode,
+        minY,
+        maxY,
+      );
+      fitManualYRef.current = false;
       yScaleRef.current = nextScale;
       plot.setScale('y', nextScale);
+      if (stageRef.current) {
+        stageRef.current.dataset.yMin = String(nextScale.min);
+        stageRef.current.dataset.yMax = String(nextScale.max);
+      }
     }
   };
   refreshViewRef.current = refreshView;
@@ -193,8 +227,12 @@ export function WaveformPlot({
     if (!host) return;
 
     const dark = theme === 'dark';
-    const axisFont = `${11 * fontScale}px "JetBrains Mono Variable", monospace`;
-    const axisColor = dark ? '#617286' : '#66778b';
+    // uPlot's font parser only recognizes integer pixel values. A fractional
+    // value such as 29.4px is otherwise misread as 4px.
+    const axisFontSize = Math.round(14 * fontScale);
+    const axisFont = `${axisFontSize}px "JetBrains Mono Variable", monospace`;
+    if (stageRef.current) stageRef.current.dataset.axisFontSize = String(axisFontSize);
+    const axisColor = dark ? '#91a4b9' : '#4f647a';
     const gridColor = dark ? '#1b2633' : '#dce4ed';
     const tickColor = dark ? '#2a394b' : '#c8d3df';
     const dashFor = (pattern: ChannelDefinition['linePattern']): number[] => {
@@ -232,18 +270,19 @@ export function WaveformPlot({
       axes: [
         {
           stroke: axisColor,
-          size: 38,
-          gap: 8,
-          space: 72,
+          size: Math.round(32 + 12 * fontScale),
+          gap: 9,
+          space: 96,
           font: axisFont,
           grid: { show: true, stroke: gridColor, width: 1 },
           ticks: { show: true, stroke: tickColor, width: 1, size: 5 },
           values: (axisPlot, ticks) => {
             const axisRange = (axisPlot.scales.x.max ?? 0) - (axisPlot.scales.x.min ?? 0);
-            const precision = axisRange <= 12 ? 1 : 0;
+            const precision = axisRange <= 0.2 ? 3 : axisRange <= 2 ? 2 : axisRange <= 20 ? 1 : 0;
+            const nowThreshold = Math.min(0.04, Math.max(0.000_5, axisRange / 100));
             return ticks.map((value) => {
               const delta = value - latestTimeRef.current;
-              if (Math.abs(delta) < 0.08) return 'now';
+              if (Math.abs(delta) < nowThreshold) return 'now';
               return `${delta.toFixed(precision)}s`;
             });
           },
@@ -251,8 +290,8 @@ export function WaveformPlot({
         {
           side: 3,
           stroke: axisColor,
-          size: 58,
-          gap: 9,
+          size: Math.round(52 + 16 * fontScale),
+          gap: 10,
           font: axisFont,
           grid: { show: true, stroke: gridColor, width: 1 },
           ticks: { show: true, stroke: tickColor, width: 1, size: 5 },
@@ -280,6 +319,18 @@ export function WaveformPlot({
           initializedPlot.ctx.lineJoin = 'round';
           initializedPlot.ctx.lineCap = 'round';
         }],
+        setScale: [(scaledPlot, scaleKey) => {
+          if (scaleKey !== 'y' || !stageRef.current) return;
+          const min = scaledPlot.scales.y.min;
+          const max = scaledPlot.scales.y.max;
+          if (Number.isFinite(min) && Number.isFinite(max)) {
+            stageRef.current.dataset.yMin = String(min);
+            stageRef.current.dataset.yMax = String(max);
+          } else {
+            delete stageRef.current.dataset.yMin;
+            delete stageRef.current.dataset.yMax;
+          }
+        }],
         setCursor: [updateHover],
         draw: [() => {
           const counter = renderCounterRef.current;
@@ -297,12 +348,18 @@ export function WaveformPlot({
 
     const plot = new uPlot(options, data as AlignedData, host);
     plotRef.current = plot;
-    if (!autoYRef.current && yScaleRef.current) plot.setScale('y', yScaleRef.current);
+    if (yScaleModeRef.current === 'manual' && yScaleRef.current) {
+      plot.setScale('y', yScaleRef.current);
+    } else if (yScaleModeRef.current === 'manual') {
+      // A persisted manual mode has no in-memory scale after reload. Fit once
+      // so the trace and Y labels are visible, then leave the range manual.
+      fitManualYRef.current = true;
+    }
 
     const overlay = plot.over;
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
-      if (!autoYRef.current && event.shiftKey) {
+      if (yScaleModeRef.current === 'manual' && !event.shiftKey) {
         const minY = plot.scales.y.min;
         const maxY = plot.scales.y.max;
         if (minY === undefined || maxY === undefined) return;
@@ -340,8 +397,18 @@ export function WaveformPlot({
       if (event.button !== 0) return;
       const min = plot.scales.x.min;
       const max = plot.scales.x.max;
-      if (min === undefined || max === undefined) return;
-      dragRef.current = { startX: event.clientX, min, max };
+      const minY = plot.scales.y.min;
+      const maxY = plot.scales.y.max;
+      if (min === undefined || max === undefined || minY === undefined || maxY === undefined) return;
+      dragRef.current = {
+        startX: event.clientX,
+        startY: event.clientY,
+        minX: min,
+        maxX: max,
+        minY,
+        maxY,
+        manualY: yScaleModeRef.current === 'manual',
+      };
       overlay.setPointerCapture(event.pointerId);
       overlay.classList.add('is-panning');
     };
@@ -349,10 +416,21 @@ export function WaveformPlot({
     const handlePointerMove = (event: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag) return;
-      const secondsPerPixel = (drag.max - drag.min) / Math.max(plot.bbox.width, 1);
-      const offset = (event.clientX - drag.startX) * secondsPerPixel;
-      plot.setScale('x', { min: drag.min - offset, max: drag.max - offset });
-      setFollowing(false);
+      const deltaX = event.clientX - drag.startX;
+      const deltaY = event.clientY - drag.startY;
+      if (Math.abs(deltaX) >= 2) {
+        const secondsPerPixel = (drag.maxX - drag.minX) / Math.max(plot.bbox.width, 1);
+        const offsetX = deltaX * secondsPerPixel;
+        plot.setScale('x', { min: drag.minX - offsetX, max: drag.maxX - offsetX });
+        setFollowing(false);
+      }
+      if (drag.manualY && Math.abs(deltaY) >= 2) {
+        const unitsPerPixel = (drag.maxY - drag.minY) / Math.max(plot.bbox.height, 1);
+        const offsetY = deltaY * unitsPerPixel;
+        const nextScale = { min: drag.minY + offsetY, max: drag.maxY + offsetY };
+        yScaleRef.current = nextScale;
+        plot.setScale('y', nextScale);
+      }
     };
 
     const stopDragging = (event: PointerEvent) => {
@@ -362,7 +440,11 @@ export function WaveformPlot({
       if (overlay.hasPointerCapture(event.pointerId)) overlay.releasePointerCapture(event.pointerId);
     };
 
-    const handleDoubleClick = () => setFollowing(true);
+    const handleDoubleClick = () => {
+      setFollowing(true);
+      if (yScaleModeRef.current === 'manual') fitManualYRef.current = true;
+      refreshViewRef.current(getClockTimeRef.current(), true);
+    };
     const handleMouseLeave = () => setHover(null);
 
     overlay.addEventListener('wheel', handleWheel, { passive: false });
@@ -381,8 +463,15 @@ export function WaveformPlot({
     resizeObserver.observe(host);
 
     return () => {
-      if (plot.scales.y.min !== undefined && plot.scales.y.max !== undefined) {
-        yScaleRef.current = { min: plot.scales.y.min, max: plot.scales.y.max };
+      const minY = plot.scales.y.min;
+      const maxY = plot.scales.y.max;
+      if (
+        typeof minY === 'number'
+        && Number.isFinite(minY)
+        && typeof maxY === 'number'
+        && Number.isFinite(maxY)
+      ) {
+        yScaleRef.current = { min: minY, max: maxY };
       }
       resizeObserver.disconnect();
       overlay.removeEventListener('wheel', handleWheel);
@@ -422,16 +511,31 @@ export function WaveformPlot({
 
     plot.setData(data as AlignedData, false);
 
+    let visibilityChanged = false;
     channels.forEach((channel, index) => {
-      plot.setSeries(index + 1, {
-        show: visibleChannels.has(channel.id),
-      });
+      const show = visibleChannels.has(channel.id);
+      if (plot.series[index + 1].show === show) return;
+      visibilityChanged = true;
+      plot.setSeries(index + 1, { show });
     });
+
+    if (yScaleMode === 'manual' && visibilityChanged) {
+      // uPlot clears a series' Y scale whenever its visibility is set. Keep
+      // the user's manual range when channels are toggled instead of leaving
+      // the scale (and therefore both trace and labels) unranged.
+      const manualScale = yScaleRef.current;
+      if (
+        manualScale
+        && Number.isFinite(manualScale.min)
+        && Number.isFinite(manualScale.max)
+      ) plot.setScale('y', manualScale);
+      else fitManualYRef.current = true;
+    }
 
     const liveEnd = pausedAt ?? getClockTime();
     refreshViewRef.current(liveEnd, true);
   }, [
-    autoY,
+    yScaleMode,
     channels,
     data,
     dataVersion,

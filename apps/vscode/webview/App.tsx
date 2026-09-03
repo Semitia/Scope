@@ -163,7 +163,7 @@ export default function App() {
           selectedChannel={selectedChannel}
           windowSeconds={windowSeconds}
           pausedAt={pausedAt}
-          autoY
+          yScaleMode="fit"
           theme={theme}
           scrollWhenIdle={false}
           getClockTime={getViewTime}

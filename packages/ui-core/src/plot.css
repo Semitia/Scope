@@ -35,7 +35,7 @@
   left: 12px;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: calc(8px * var(--font-scale, 1));
+  font-size: calc(10px * var(--font-scale, 1));
   pointer-events: none;
 }
 
@@ -84,7 +84,7 @@
 .plot-tooltip > span {
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: calc(8px * var(--font-scale, 1));
+  font-size: calc(9.5px * var(--font-scale, 1));
 }
 
 .plot-tooltip > strong {

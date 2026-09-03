@@ -1,3 +1,5 @@
+import type { YScaleMode } from './types';
+
 export type PanelType = 'scope' | 'value-bar' | 'indicators';
 
 export interface StateColorDefinition {
@@ -23,7 +25,7 @@ interface BasePanelDefinition {
 
 export interface ScopePanelDefinition extends BasePanelDefinition {
   type: 'scope';
-  autoY: boolean;
+  yScaleMode: YScaleMode;
   windowMode: 'auto' | 'manual';
   windowSeconds: number;
 }

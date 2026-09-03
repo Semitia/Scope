@@ -40,6 +40,20 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await expect(page.locator('.uplot')).toBeVisible();
   await expect(page.locator('.legend-item')).toHaveCount(4);
 
+  const sidebarResizeHandle = page.getByRole('separator', { name: 'Resize sidebar' });
+  await expect(sidebarResizeHandle).toHaveAttribute('aria-valuenow', '252');
+  const sidebarResizeBox = await sidebarResizeHandle.boundingBox();
+  if (!sidebarResizeBox) throw new Error('Sidebar resize handle is not visible');
+  await page.mouse.move(sidebarResizeBox.x + sidebarResizeBox.width / 2, sidebarResizeBox.y + 80);
+  await page.mouse.down();
+  await page.mouse.move(sidebarResizeBox.x + sidebarResizeBox.width / 2 + 72, sidebarResizeBox.y + 80);
+  await page.mouse.up();
+  await expect(sidebarResizeHandle).toHaveAttribute('aria-valuenow', '324');
+  await page.reload();
+  await expect(sidebarResizeHandle).toHaveAttribute('aria-valuenow', '324');
+  await sidebarResizeHandle.dblclick();
+  await expect(sidebarResizeHandle).toHaveAttribute('aria-valuenow', '252');
+
   await page.waitForTimeout(1_200);
   await page.screenshot({ path: '../../artifacts/debugscope-1440x900.png', fullPage: true });
 
@@ -67,8 +81,9 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await expect(settingsPanel).toBeVisible();
   await expect(idleScrollSwitch).toHaveAttribute('aria-checked', 'false');
   const fontSizeSlider = settingsPanel.getByRole('slider', { name: 'Font size' });
-  await fontSizeSlider.fill('110');
-  await expect(page.locator('html')).toHaveCSS('--font-scale', '1.1');
+  await fontSizeSlider.fill('140');
+  await expect(page.locator('html')).toHaveCSS('--font-scale', '1.4');
+  await expect(page.locator('.plot-stage')).toHaveAttribute('data-axis-font-size', '20');
   await page.screenshot({ path: '../../artifacts/debugscope-settings.png', fullPage: true });
   await idleScrollSwitch.click();
   await expect(idleScrollSwitch).toHaveAttribute('aria-checked', 'true');
@@ -78,7 +93,7 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await expect(page.locator('.uplot')).toBeVisible();
   await openSettings.click();
   await expect(idleScrollSwitch).toHaveAttribute('aria-checked', 'true');
-  await expect(fontSizeSlider).toHaveValue('110');
+  await expect(fontSizeSlider).toHaveValue('140');
   await fontSizeSlider.fill('100');
   await idleScrollSwitch.click();
   await page.keyboard.press('Escape');
@@ -100,11 +115,14 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await scopeTitleInput.press('Enter');
   const auxScope = page.getByRole('region', { name: 'Aux scope' });
   await expect(auxScope).toBeVisible();
-  await auxScope.getByRole('button', { name: 'Auto Y for Aux scope' }).click();
+  await auxScope.getByLabel('Y axis mode for Aux scope').selectOption('manual');
+  await page.waitForTimeout(250);
+  await expect(auxScope.locator('.plot-stage')).toHaveAttribute('data-y-min', /\d/);
+  await expect(auxScope.locator('.plot-stage')).toHaveAttribute('data-y-max', /\d/);
   await auxScope.getByLabel('Visible time window for Aux scope').fill('5');
   await auxScope.getByLabel('Visible time window for Aux scope').blur();
   await expect(page.getByRole('region', { name: 'Scope 1' })
-    .getByRole('button', { name: 'Auto Y for Scope 1' })).toHaveAttribute('aria-pressed', 'true');
+    .getByLabel('Y axis mode for Scope 1')).toHaveValue('fit');
   await expect(page.getByRole('region', { name: 'Scope 1' })
     .getByLabel('Visible time window for Scope 1')).toHaveValue('10');
   await expect(page.locator('.channel-heading .channel-count')).toHaveText('2 / 7');
@@ -114,7 +132,9 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await expect(page.locator('.scope-panel')).toHaveCount(2);
   await expect(page.getByRole('region', { name: 'Aux scope' }).locator('.legend-item')).toHaveCount(2);
   await expect(page.getByRole('region', { name: 'Aux scope' })
-    .getByRole('button', { name: 'Auto Y for Aux scope' })).toHaveAttribute('aria-pressed', 'false');
+    .getByLabel('Y axis mode for Aux scope')).toHaveValue('manual');
+  await expect(page.getByRole('region', { name: 'Aux scope' }).locator('.plot-stage'))
+    .toHaveAttribute('data-y-min', /\d/);
   await expect(page.getByRole('region', { name: 'Aux scope' })
     .getByLabel('Visible time window for Aux scope')).toHaveValue('5');
   await page.getByRole('button', { name: 'Activate Scope 1' }).click();
@@ -125,11 +145,15 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await page.getByRole('button', { name: /Pause/ }).click();
   await expect(page.getByText('PAUSED')).toBeVisible();
 
-  const autoY = page.getByRole('button', { name: 'Auto Y for Scope 1' });
-  await expect(autoY).toHaveAttribute('aria-pressed', 'true');
-  await autoY.click();
-  await expect(autoY).toHaveAttribute('aria-pressed', 'false');
-  await autoY.click();
+  const yAxisMode = page.getByLabel('Y axis mode for Scope 1');
+  await expect(yAxisMode).toHaveValue('fit');
+  await yAxisMode.selectOption('zero-min');
+  await expect(yAxisMode).toHaveValue('zero-min');
+  await yAxisMode.selectOption('zero-max');
+  await expect(yAxisMode).toHaveValue('zero-max');
+  await yAxisMode.selectOption('manual');
+  await expect(yAxisMode.locator('..')).toHaveAttribute('title', /wheel to zoom Y/);
+  await yAxisMode.selectOption('fit');
 
   await page.getByRole('button', { name: 'Style Error', exact: true }).click();
   await page.getByLabel('Color for Error').evaluate((element) => {
@@ -257,7 +281,7 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   expect(workspace.version).toBe(1);
   expect(workspace.panels).toHaveLength(3);
   expect(workspace.panels.find((panel) => panel.type === 'scope')).toMatchObject({
-    autoY: true,
+    yScaleMode: 'fit',
     windowSeconds: 10,
   });
   expect(workspace.panels.find((panel) => panel.type === 'value-bar')).toMatchObject({
@@ -302,10 +326,16 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await expect(page.getByText('DEMO LIVE', { exact: true })).toBeVisible();
 
   const plotOverlay = page.locator('.u-over');
-  await plotOverlay.hover({ position: { x: 500, y: 100 } });
+  await yAxisMode.selectOption('manual');
+  await plotOverlay.hover({ position: { x: 300, y: 100 } });
+  await page.mouse.wheel(0, -220);
+  await expect(page.getByRole('button', { name: 'Return to live' })).toBeHidden();
+  await plotOverlay.dblclick({ position: { x: 300, y: 100 } });
+  await yAxisMode.selectOption('fit');
+  await plotOverlay.hover({ position: { x: 300, y: 100 } });
   await page.mouse.wheel(0, -220);
   await expect(page.getByRole('button', { name: 'Return to live' })).toBeVisible();
-  await plotOverlay.dblclick({ position: { x: 500, y: 100 } });
+  await plotOverlay.dblclick({ position: { x: 300, y: 100 } });
   await expect(page.getByRole('button', { name: 'Return to live' })).toBeHidden();
 
   for (const channel of ['Target', 'Speed', 'Estimate']) {

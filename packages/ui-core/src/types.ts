@@ -1,6 +1,7 @@
 export type LineCurve = 'smooth' | 'linear' | 'stepped';
 export type LinePattern = 'solid' | 'dashed' | 'dotted' | 'dashdot';
 export type ThemeMode = 'light' | 'dark';
+export type YScaleMode = 'fit' | 'zero-min' | 'zero-max' | 'manual';
 
 export interface ChannelDefinition {
   id: string;
