@@ -24,6 +24,7 @@ interface BasePanelDefinition {
 export interface ScopePanelDefinition extends BasePanelDefinition {
   type: 'scope';
   autoY: boolean;
+  windowMode: 'auto' | 'manual';
   windowSeconds: number;
 }
 

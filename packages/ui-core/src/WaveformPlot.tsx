@@ -18,6 +18,7 @@ interface WaveformPlotProps {
   pausedAt: number | null;
   autoY: boolean;
   theme: ThemeMode;
+  fontScale?: number;
   scrollWhenIdle: boolean;
   getClockTime: () => number;
   onShowAllChannels: () => void;
@@ -28,8 +29,8 @@ interface WaveformPlotProps {
   showEmptyAction?: boolean;
 }
 
-const MIN_VIEW_SECONDS = 0.75;
-const MAX_VIEW_SECONDS = 60;
+const MIN_VIEW_SECONDS = 0.1;
+const MAX_VIEW_SECONDS = 3_600;
 
 function formatAxisValue(value: number): string {
   if (Math.abs(value) >= 1_000) return value.toFixed(0);
@@ -48,6 +49,7 @@ export function WaveformPlot({
   pausedAt,
   autoY,
   theme,
+  fontScale = 1,
   scrollWhenIdle,
   getClockTime,
   onShowAllChannels,
@@ -101,7 +103,7 @@ export function WaveformPlot({
       channel.linePattern,
       channel.lineWidth,
     ].join(':'))
-    .join('|') + `:${theme}`;
+    .join('|') + `:${theme}:${fontScale}`;
 
   const setFollowing = (following: boolean) => {
     followingRef.current = following;
@@ -191,6 +193,7 @@ export function WaveformPlot({
     if (!host) return;
 
     const dark = theme === 'dark';
+    const axisFont = `${11 * fontScale}px "JetBrains Mono Variable", monospace`;
     const axisColor = dark ? '#617286' : '#66778b';
     const gridColor = dark ? '#1b2633' : '#dce4ed';
     const tickColor = dark ? '#2a394b' : '#c8d3df';
@@ -232,7 +235,7 @@ export function WaveformPlot({
           size: 38,
           gap: 8,
           space: 72,
-          font: '11px "JetBrains Mono Variable", monospace',
+          font: axisFont,
           grid: { show: true, stroke: gridColor, width: 1 },
           ticks: { show: true, stroke: tickColor, width: 1, size: 5 },
           values: (axisPlot, ticks) => {
@@ -250,7 +253,7 @@ export function WaveformPlot({
           stroke: axisColor,
           size: 58,
           gap: 9,
-          font: '11px "JetBrains Mono Variable", monospace',
+          font: axisFont,
           grid: { show: true, stroke: gridColor, width: 1 },
           ticks: { show: true, stroke: tickColor, width: 1, size: 5 },
           values: (_plot, ticks) => ticks.map(formatAxisValue),

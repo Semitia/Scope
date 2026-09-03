@@ -37,10 +37,11 @@ import {
   type PanelDefinition,
   type PanelGridLayout,
   type PanelType,
+  type ScopePanelDefinition,
   type StateColorDefinition,
   type ValueBarChannelRange,
 } from './panelTypes';
-import { prepareTimeline } from './timeline';
+import { estimateSampling, prepareTimeline } from './timeline';
 import type {
   ChannelDefinition,
   LineCurve,
@@ -67,12 +68,17 @@ const GRID_GAP = 12;
 const GRID_ROW_HEIGHT = 72;
 const MIN_PANEL_WIDTH = 3;
 const MIN_PANEL_HEIGHT = 2;
+const MIN_INDICATOR_PANEL_WIDTH = 2;
+const MIN_INDICATOR_PANEL_HEIGHT = 1;
+const MIN_WINDOW_SECONDS = 0.1;
+const MAX_WINDOW_SECONDS = 3_600;
 const WORKSPACE_CONFIG_SCHEMA = 'debugscope.workspace';
 const WORKSPACE_CONFIG_VERSION = 1;
 const MAX_WORKSPACE_FILE_BYTES = 1024 * 1024;
 
 interface UserSettings {
   scrollWhenIdle: boolean;
+  fontScale: number;
 }
 
 type ScopeLayouts = Record<string, PanelDefinition[]>;
@@ -121,6 +127,101 @@ const PATTERN_OPTIONS: ReadonlyArray<{ value: LinePattern; label: string }> = [
 interface StylePreviewProps {
   kind: 'curve' | 'pattern';
   value: LineCurve | LinePattern;
+}
+
+interface TimeWindowControlProps {
+  panel: ScopePanelDefinition;
+  automaticSeconds: number;
+  frequencyHz: number;
+  onChange: (patch: Partial<ScopePanelDefinition>) => void;
+}
+
+function clampWindowSeconds(value: number): number {
+  return Math.min(MAX_WINDOW_SECONDS, Math.max(MIN_WINDOW_SECONDS, value));
+}
+
+function formatWindowSeconds(value: number): string {
+  if (value >= 10) return String(Math.round(value));
+  if (value >= 1) return Number(value.toFixed(1)).toString();
+  return Number(value.toFixed(2)).toString();
+}
+
+function TimeWindowControl({
+  panel,
+  automaticSeconds,
+  frequencyHz,
+  onChange,
+}: TimeWindowControlProps) {
+  const resolvedSeconds = panel.windowMode === 'auto' ? automaticSeconds : panel.windowSeconds;
+  const [draft, setDraft] = useState(() => formatWindowSeconds(resolvedSeconds));
+  const editingRef = useRef(false);
+  const cancelCommitRef = useRef(false);
+
+  useEffect(() => {
+    if (!editingRef.current) setDraft(formatWindowSeconds(resolvedSeconds));
+  }, [resolvedSeconds]);
+
+  const commit = () => {
+    editingRef.current = false;
+    const parsed = Number(draft);
+    const seconds = Number.isFinite(parsed)
+      ? clampWindowSeconds(parsed)
+      : resolvedSeconds;
+    setDraft(formatWindowSeconds(seconds));
+    onChange({ windowMode: 'manual', windowSeconds: seconds });
+  };
+
+  return (
+    <div
+      className={`scope-window-control${panel.windowMode === 'auto' ? ' automatic' : ''}`}
+      title={panel.windowMode === 'auto'
+        ? `Automatic window · estimated ${frequencyHz.toFixed(frequencyHz >= 10 ? 0 : 1)} Hz`
+        : 'Manual visible time window'}
+    >
+      <button
+        type="button"
+        className={panel.windowMode === 'auto' ? 'active' : ''}
+        onClick={() => onChange(panel.windowMode === 'auto'
+          ? { windowMode: 'manual', windowSeconds: automaticSeconds }
+          : { windowMode: 'auto' })}
+        aria-label={`Automatic time window for ${panel.title}`}
+        aria-pressed={panel.windowMode === 'auto'}
+      >
+        A
+      </button>
+      <input
+        type="number"
+        min={MIN_WINDOW_SECONDS}
+        max={MAX_WINDOW_SECONDS}
+        step="any"
+        value={draft}
+        onFocus={(event) => {
+          editingRef.current = true;
+          cancelCommitRef.current = false;
+          event.currentTarget.select();
+        }}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          if (cancelCommitRef.current) {
+            cancelCommitRef.current = false;
+            editingRef.current = false;
+            return;
+          }
+          commit();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur();
+          if (event.key === 'Escape') {
+            cancelCommitRef.current = true;
+            setDraft(formatWindowSeconds(resolvedSeconds));
+            event.currentTarget.blur();
+          }
+        }}
+        aria-label={`Visible time window for ${panel.title}`}
+      />
+      <span>s</span>
+    </div>
+  );
 }
 
 function StylePreview({ kind, value }: StylePreviewProps) {
@@ -285,9 +386,12 @@ function initialChannelStyles(): Record<string, StoredChannelStyle> {
 function initialSettings(): UserSettings {
   try {
     const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') as Partial<UserSettings>;
-    return { scrollWhenIdle: stored.scrollWhenIdle === true };
+    const fontScale = typeof stored.fontScale === 'number' && Number.isFinite(stored.fontScale)
+      ? Math.min(1.4, Math.max(0.8, stored.fontScale))
+      : 1;
+    return { scrollWhenIdle: stored.scrollWhenIdle === true, fontScale };
   } catch {
-    return { scrollWhenIdle: false };
+    return { scrollWhenIdle: false, fontScale: 1 };
   }
 }
 
@@ -310,25 +414,36 @@ function defaultPanelLayout(index: number, single = false): PanelGridLayout {
   return { x: 0, y: index * height, width: GRID_COLUMNS, height };
 }
 
-function normalizePanelLayout(value: unknown, fallback: PanelGridLayout): PanelGridLayout {
+function panelMinimumSize(type: PanelType): { width: number; height: number } {
+  return type === 'indicators'
+    ? { width: MIN_INDICATOR_PANEL_WIDTH, height: MIN_INDICATOR_PANEL_HEIGHT }
+    : { width: MIN_PANEL_WIDTH, height: MIN_PANEL_HEIGHT };
+}
+
+function normalizePanelLayout(
+  value: unknown,
+  fallback: PanelGridLayout,
+  type: PanelType = 'scope',
+): PanelGridLayout {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback;
   const candidate = value as Record<string, unknown>;
+  const minimum = panelMinimumSize(type);
   const number = (key: string, defaultValue: number) => (
     typeof candidate[key] === 'number' && Number.isFinite(candidate[key])
       ? Math.round(candidate[key])
       : defaultValue
   );
-  const width = Math.max(MIN_PANEL_WIDTH, Math.min(GRID_COLUMNS, number('width', fallback.width)));
+  const width = Math.max(minimum.width, Math.min(GRID_COLUMNS, number('width', fallback.width)));
   const x = Math.max(0, Math.min(GRID_COLUMNS - width, number('x', fallback.x)));
   return {
     x,
     y: Math.max(0, number('y', fallback.y)),
     width,
-    height: Math.max(MIN_PANEL_HEIGHT, number('height', fallback.height)),
+    height: Math.max(minimum.height, number('height', fallback.height)),
   };
 }
 
-function isWorkspacePanelLayout(value: unknown): value is PanelGridLayout {
+function isWorkspacePanelLayout(value: unknown, type: PanelType): value is PanelGridLayout {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const layout = value as Record<string, unknown>;
   if (!['x', 'y', 'width', 'height'].every((key) => (
@@ -337,12 +452,13 @@ function isWorkspacePanelLayout(value: unknown): value is PanelGridLayout {
     && Number.isInteger(layout[key])
   ))) return false;
   const { x, y, width, height } = layout as unknown as PanelGridLayout;
+  const minimum = panelMinimumSize(type);
   return x >= 0
     && y >= 0
-    && width >= MIN_PANEL_WIDTH
+    && width >= minimum.width
     && width <= GRID_COLUMNS
     && x + width <= GRID_COLUMNS
-    && height >= MIN_PANEL_HEIGHT
+    && height >= minimum.height
     && y <= 100_000
     && height <= 10_000;
 }
@@ -418,7 +534,7 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
       (panel.id as string).length > 200
       || (panel.title as string).length > 120
       || (panel.channelKeys as string[]).length > 1024
-      || !isWorkspacePanelLayout(panel.layout)
+      || !isWorkspacePanelLayout(panel.layout, panel.type as PanelType)
     )) {
       fail(`Panel ${panelIndex + 1} has invalid limits or grid coordinates.`);
     }
@@ -435,6 +551,7 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
       layout: normalizePanelLayout(
         panel.layout,
         defaultPanelLayout(panelIndex, value.length === 1),
+        panel.type as PanelType,
       ),
     };
     if (panel.type === 'value-bar') {
@@ -522,16 +639,26 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
     if (strict && panel.autoY !== undefined && typeof panel.autoY !== 'boolean') {
       fail(`Waveform panel ${panelIndex + 1} has an invalid Auto Y setting.`);
     }
-    if (strict && panel.windowSeconds !== undefined && ![5, 10, 30].includes(Number(panel.windowSeconds))) {
+    if (strict && panel.windowMode !== undefined && panel.windowMode !== 'auto' && panel.windowMode !== 'manual') {
+      fail(`Waveform panel ${panelIndex + 1} has an invalid time window mode.`);
+    }
+    if (strict && panel.windowSeconds !== undefined && (
+      typeof panel.windowSeconds !== 'number'
+      || !Number.isFinite(panel.windowSeconds)
+      || panel.windowSeconds < MIN_WINDOW_SECONDS
+      || panel.windowSeconds > MAX_WINDOW_SECONDS
+    )) {
       fail(`Waveform panel ${panelIndex + 1} has an invalid time window.`);
     }
+    const storedWindowSeconds = typeof panel.windowSeconds === 'number' && Number.isFinite(panel.windowSeconds)
+      ? clampWindowSeconds(panel.windowSeconds)
+      : 10;
     panels.push({
       ...base,
       type: 'scope',
       autoY: panel.autoY !== false,
-      windowSeconds: [5, 10, 30].includes(Number(panel.windowSeconds))
-        ? Number(panel.windowSeconds)
-        : 10,
+      windowMode: panel.windowMode === 'auto' ? 'auto' : 'manual',
+      windowSeconds: storedWindowSeconds,
     });
   }
   return panels;
@@ -631,6 +758,7 @@ export default function App() {
   const [editingPanelTitleId, setEditingPanelTitleId] = useState<string | null>(null);
   const [panelTitleDraft, setPanelTitleDraft] = useState('');
   const [channelPickerScopeId, setChannelPickerScopeId] = useState<string | null>(null);
+  const [colorEditorPanelId, setColorEditorPanelId] = useState<string | null>(null);
   const [addPanelMenuOpen, setAddPanelMenuOpen] = useState(false);
   const [styleEditorChannelId, setStyleEditorChannelId] = useState<string | null>(null);
   const [selectedChannel, setSelectedChannel] = useState('');
@@ -669,6 +797,7 @@ export default function App() {
     channelKeys: channels.slice(0, 4).map((channel) => channel.key),
     layout: defaultPanelLayout(0, true),
     autoY: true,
+    windowMode: 'auto',
     windowSeconds: 10,
   }), [channelIdentity, layoutKey]);
   const scopePanels = useMemo(() => {
@@ -719,6 +848,10 @@ export default function App() {
     () => prepareTimeline(telemetry.data, settings.scrollWhenIdle),
     [settings.scrollWhenIdle, telemetry.data, telemetry.version],
   );
+  const sampling = useMemo(
+    () => estimateSampling(telemetry.data[0]),
+    [telemetry.data, telemetry.version],
+  );
 
   useEffect(() => {
     const previous = previousIdleScrollRef.current;
@@ -732,6 +865,10 @@ export default function App() {
     document.documentElement.style.colorScheme = theme;
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--font-scale', String(settings.fontScale));
+  }, [settings.fontScale]);
 
   useEffect(() => {
     localStorage.setItem(CHANNEL_STYLES_KEY, JSON.stringify(channelStyles));
@@ -754,7 +891,8 @@ export default function App() {
       || addPanelMenuOpen
       || hubEditorOpen
       || Boolean(styleEditorChannelId)
-      || Boolean(channelPickerScopeId);
+      || Boolean(channelPickerScopeId)
+      || Boolean(colorEditorPanelId);
     if (!anyOverlayOpen) return;
     const closeOutside = (event: PointerEvent) => {
       const target = event.target instanceof Element ? event.target : null;
@@ -776,6 +914,11 @@ export default function App() {
       )) {
         setChannelPickerScopeId(null);
       }
+      if (colorEditorPanelId && !target.closest(
+        '.state-color-editor, [data-color-editor-trigger]',
+      )) {
+        setColorEditorPanelId(null);
+      }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -784,6 +927,7 @@ export default function App() {
       setHubEditorOpen(false);
       setStyleEditorChannelId(null);
       setChannelPickerScopeId(null);
+      setColorEditorPanelId(null);
     };
     document.addEventListener('pointerdown', closeOutside);
     window.addEventListener('keydown', closeOnEscape);
@@ -794,6 +938,7 @@ export default function App() {
   }, [
     addPanelMenuOpen,
     channelPickerScopeId,
+    colorEditorPanelId,
     hubEditorOpen,
     settingsOpen,
     styleEditorChannelId,
@@ -818,7 +963,10 @@ export default function App() {
     ) {
       setChannelPickerScopeId(null);
     }
-  }, [activeScopeId, channelPickerScopeId, scopePanels]);
+    if (colorEditorPanelId && !scopePanels.some((panel) => panel.id === colorEditorPanelId)) {
+      setColorEditorPanelId(null);
+    }
+  }, [activeScopeId, channelPickerScopeId, colorEditorPanelId, scopePanels]);
 
   useEffect(() => {
     const selected = channels.find((channel) => channel.id === selectedChannel);
@@ -833,6 +981,7 @@ export default function App() {
     setStyleEditorChannelId(null);
     setActiveScopeId(null);
     setChannelPickerScopeId(null);
+    setColorEditorPanelId(null);
     setEditingPanelTitleId(null);
   }, [telemetry.activeSourceId]);
 
@@ -950,6 +1099,10 @@ export default function App() {
       const deltaColumns = Math.round((event.clientX - layoutInteraction.startX) / columnStep);
       const deltaRows = Math.round((event.clientY - layoutInteraction.startY) / rowStep);
       const origin = layoutInteraction.origin;
+      const resizedPanel = layoutInteraction.panels.find((panel) => (
+        panel.id === layoutInteraction.panelId
+      ));
+      const minimum = panelMinimumSize(resizedPanel?.type ?? 'scope');
       const next = layoutInteraction.kind === 'move'
         ? {
           ...origin,
@@ -959,10 +1112,10 @@ export default function App() {
         : {
           ...origin,
           width: Math.max(
-            MIN_PANEL_WIDTH,
+            minimum.width,
             Math.min(GRID_COLUMNS - origin.x, origin.width + deltaColumns),
           ),
-          height: Math.max(MIN_PANEL_HEIGHT, origin.height + deltaRows),
+          height: Math.max(minimum.height, origin.height + deltaRows),
         };
       const preview = placePanelWithoutOverlap(
         layoutInteraction.panels,
@@ -1066,7 +1219,7 @@ export default function App() {
       }
       : type === 'indicators'
         ? { ...base, type, stateColors: DEFAULT_STATE_COLORS.map((state) => ({ ...state })) }
-        : { ...base, type, autoY: true, windowSeconds: 10 };
+        : { ...base, type, autoY: true, windowMode: 'auto', windowSeconds: 10 };
     updateScopePanels((panels) => [...panels, panel]);
     setActiveScopeId(panel.id);
     setChannelPickerScopeId(panel.id);
@@ -1089,6 +1242,7 @@ export default function App() {
     });
     if (activeScopeId === scopeId) setActiveScopeId(remaining[0]?.id ?? null);
     if (channelPickerScopeId === scopeId) setChannelPickerScopeId(null);
+    if (colorEditorPanelId === scopeId) setColorEditorPanelId(null);
   };
 
   const visiblePointCount = scopePanels.reduce(
@@ -1680,7 +1834,7 @@ export default function App() {
 
             return (
               <section
-                className={`scope-panel${panelIsActive ? ' active' : ''}${
+                className={`scope-panel panel-${panel.type}${panel.layout.width <= 2 ? ' compact-panel' : ''}${panelIsActive ? ' active' : ''}${
                   layoutInteraction?.panelId === panel.id ? ` layout-${layoutInteraction.kind}` : ''
                 }`}
                 aria-label={panel.title}
@@ -1797,20 +1951,27 @@ export default function App() {
                           <Maximize size={13} />
                           <span>Y</span>
                         </button>
-                        <label className="scope-window-control" title="Visible time window">
-                          <select
-                            value={panel.windowSeconds}
-                            onChange={(event) => updatePanel(panel.id, {
-                              windowSeconds: Number(event.target.value),
-                            })}
-                            aria-label={`Visible time window for ${panel.title}`}
-                          >
-                            <option value={5}>5s</option>
-                            <option value={10}>10s</option>
-                            <option value={30}>30s</option>
-                          </select>
-                        </label>
+                        <TimeWindowControl
+                          panel={panel}
+                          automaticSeconds={sampling.suggestedWindowSeconds}
+                          frequencyHz={sampling.frequencyHz}
+                          onChange={(patch) => updatePanel(panel.id, patch)}
+                        />
                       </>
+                    )}
+                    {panel.type === 'indicators' && (
+                      <button
+                        className={`scope-action${colorEditorPanelId === panel.id ? ' active' : ''}`}
+                        type="button"
+                        onClick={() => setColorEditorPanelId((current) => current === panel.id ? null : panel.id)}
+                        aria-label={`Configure colors for ${panel.title}`}
+                        aria-haspopup="dialog"
+                        aria-expanded={colorEditorPanelId === panel.id}
+                        title="State colors"
+                        data-color-editor-trigger
+                      >
+                        <Palette size={13} />
+                      </button>
                     )}
                     <button
                       className={`scope-action${pickerOpen ? ' active' : ''}`}
@@ -1846,10 +2007,13 @@ export default function App() {
                     dataVersion={telemetry.version}
                     visibleChannels={panelVisibleChannels}
                     selectedChannel={panelIsActive ? selectedChannel : ''}
-                    windowSeconds={panel.windowSeconds}
+                    windowSeconds={panel.windowMode === 'auto'
+                      ? sampling.suggestedWindowSeconds
+                      : panel.windowSeconds}
                     pausedAt={pausedAt}
                     autoY={panel.autoY}
                     theme={theme}
+                    fontScale={settings.fontScale}
                     scrollWhenIdle={settings.scrollWhenIdle}
                     getClockTime={getViewTime}
                     onShowAllChannels={() => setScopeChannelKeys(
@@ -1885,6 +2049,8 @@ export default function App() {
                     channels={channels}
                     latest={telemetry.latest}
                     channelIndexes={channelIndexes}
+                    editingColors={colorEditorPanelId === panel.id}
+                    onEditingColorsChange={(editing) => setColorEditorPanelId(editing ? panel.id : null)}
                     onChange={(patch) => updatePanel(panel.id, patch as Partial<PanelDefinition>)}
                   />
                 )}
@@ -2044,6 +2210,34 @@ export default function App() {
                 <X size={16} />
               </button>
             </div>
+
+            <section className="settings-section" aria-labelledby="appearance-settings-title">
+              <div className="settings-section-heading">
+                <span id="appearance-settings-title">APPEARANCE</span>
+                <small>{Math.round(settings.fontScale * 100)}%</small>
+              </div>
+              <div className="settings-entry font-size-setting">
+                <span className="settings-entry-copy">
+                  <strong>Font size</strong>
+                  <small>Adjust labels, values, controls, and plot axes across the workspace.</small>
+                </span>
+                <label className="font-size-slider">
+                  <input
+                    type="range"
+                    min="80"
+                    max="140"
+                    step="5"
+                    value={Math.round(settings.fontScale * 100)}
+                    onChange={(event) => setSettings((current) => ({
+                      ...current,
+                      fontScale: Number(event.target.value) / 100,
+                    }))}
+                    aria-label="Font size"
+                  />
+                  <span>{Math.round(settings.fontScale * 100)}%</span>
+                </label>
+              </div>
+            </section>
 
             <section className="settings-section" aria-labelledby="timeline-settings-title">
               <div className="settings-section-heading">

@@ -1,1 +1,1 @@
-export { prepareTimeline } from '@debugscope/ui-core';
+export { estimateSampling, prepareTimeline } from '@debugscope/ui-core';

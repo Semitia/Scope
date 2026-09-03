@@ -66,6 +66,9 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   });
   await expect(settingsPanel).toBeVisible();
   await expect(idleScrollSwitch).toHaveAttribute('aria-checked', 'false');
+  const fontSizeSlider = settingsPanel.getByRole('slider', { name: 'Font size' });
+  await fontSizeSlider.fill('110');
+  await expect(page.locator('html')).toHaveCSS('--font-scale', '1.1');
   await page.screenshot({ path: '../../artifacts/debugscope-settings.png', fullPage: true });
   await idleScrollSwitch.click();
   await expect(idleScrollSwitch).toHaveAttribute('aria-checked', 'true');
@@ -75,6 +78,8 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await expect(page.locator('.uplot')).toBeVisible();
   await openSettings.click();
   await expect(idleScrollSwitch).toHaveAttribute('aria-checked', 'true');
+  await expect(fontSizeSlider).toHaveValue('110');
+  await fontSizeSlider.fill('100');
   await idleScrollSwitch.click();
   await page.keyboard.press('Escape');
   await expect(settingsPanel).toBeHidden();
@@ -96,7 +101,8 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   const auxScope = page.getByRole('region', { name: 'Aux scope' });
   await expect(auxScope).toBeVisible();
   await auxScope.getByRole('button', { name: 'Auto Y for Aux scope' }).click();
-  await auxScope.getByLabel('Visible time window for Aux scope').selectOption('5');
+  await auxScope.getByLabel('Visible time window for Aux scope').fill('5');
+  await auxScope.getByLabel('Visible time window for Aux scope').blur();
   await expect(page.getByRole('region', { name: 'Scope 1' })
     .getByRole('button', { name: 'Auto Y for Scope 1' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('region', { name: 'Scope 1' })
@@ -206,11 +212,19 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await page.getByRole('button', { name: 'Close channels for Indicators 1' }).click();
   const indicatorPanel = page.getByRole('region', { name: 'Indicators 1' });
   await expect(indicatorPanel.locator('.indicator-item')).toHaveCount(3);
+  await dragBy(
+    page,
+    indicatorPanel.getByRole('button', { name: 'Resize Indicators 1' }),
+    -gridWidth,
+    -1_000,
+  );
+  await expect(indicatorPanel).toHaveAttribute('data-grid-width', '2');
+  await expect(indicatorPanel).toHaveAttribute('data-grid-height', '1');
   await indicatorPanel.getByRole('button', { name: 'Configure colors for Indicators 1' }).click();
-  await expect(indicatorPanel.getByRole('dialog', { name: 'State colors for Indicators 1' })).toBeVisible();
-  await indicatorPanel.getByLabel('State label 2').fill('Clear');
+  await expect(page.getByRole('dialog', { name: 'State colors for Indicators 1' })).toBeVisible();
+  await page.getByLabel('State label 2').fill('Clear');
   await page.locator('.brand-block').click();
-  await expect(indicatorPanel.getByRole('dialog', { name: 'State colors for Indicators 1' })).toBeHidden();
+  await expect(page.getByRole('dialog', { name: 'State colors for Indicators 1' })).toBeHidden();
   await expect(indicatorPanel.locator('.indicator-state').first()).toHaveText(/^-?\d/);
   await expect(indicatorPanel.getByText('On', { exact: true })).toHaveCount(0);
   await page.locator('.workspace').evaluate((element) => element.scrollTo(0, 0));
@@ -282,7 +296,8 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
 
   await page.getByRole('button', { name: /Pause/ }).click();
 
-  await page.getByLabel('Visible time window for Scope 1').selectOption('5');
+  await page.getByLabel('Visible time window for Scope 1').fill('5');
+  await page.getByLabel('Visible time window for Scope 1').blur();
   await page.getByRole('button', { name: /Resume/ }).click();
   await expect(page.getByText('DEMO LIVE', { exact: true })).toBeVisible();
 

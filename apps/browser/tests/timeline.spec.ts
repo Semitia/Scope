@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { prepareTimeline } from '../src/timeline';
+import { estimateSampling, prepareTimeline } from '../src/timeline';
 import type { TelemetryData } from '../src/types';
 
 const stoppedAndResumedData: TelemetryData = [
@@ -29,4 +29,27 @@ test('sample-time mode removes idle time and keeps resumed data connected', () =
   });
   expect(timeline.data[1]).toEqual([10, 11, undefined, 14, 15]);
   expect(timeline.data[2]).toEqual([20, 21, 22, 24, 25]);
+});
+
+test('sampling estimate ignores interruptions when choosing an automatic window', () => {
+  const timestamps = [
+    ...Array.from({ length: 121 }, (_, index) => index / 30),
+    ...Array.from({ length: 121 }, (_, index) => 8 + index / 30),
+  ];
+
+  const estimate = estimateSampling(timestamps);
+
+  expect(estimate.frequencyHz).toBeCloseTo(30);
+  expect(estimate.gapCount).toBe(1);
+  expect(estimate.suggestedWindowSeconds).toBe(10);
+});
+
+test('sampling estimate shortens the automatic window for high-frequency data', () => {
+  const timestamps = Array.from({ length: 400 }, (_, index) => index / 1_000);
+
+  const estimate = estimateSampling(timestamps);
+
+  expect(estimate.frequencyHz).toBeCloseTo(1_000);
+  expect(estimate.gapCount).toBe(0);
+  expect(estimate.suggestedWindowSeconds).toBe(0.25);
 });

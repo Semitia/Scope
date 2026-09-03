@@ -1,5 +1,5 @@
-import { Plus, SlidersHorizontal, Trash2, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { Plus, Trash2, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import type { ChannelDefinition } from '../types';
 import {
   DEFAULT_STATE_COLORS,
@@ -12,6 +12,8 @@ interface IndicatorPanelProps {
   channels: ChannelDefinition[];
   latest: number[];
   channelIndexes: Map<string, number>;
+  editingColors: boolean;
+  onEditingColorsChange: (editing: boolean) => void;
   onChange: (patch: Partial<IndicatorPanelDefinition>) => void;
 }
 
@@ -26,11 +28,10 @@ export function IndicatorPanel({
   channels,
   latest,
   channelIndexes,
+  editingColors,
+  onEditingColorsChange,
   onChange,
 }: IndicatorPanelProps) {
-  const [editingColors, setEditingColors] = useState(false);
-  const colorButtonRef = useRef<HTMLButtonElement>(null);
-  const colorEditorRef = useRef<HTMLDivElement>(null);
   const selected = channels.filter((channel) => panel.channelKeys.includes(channel.key));
   const stateColors = panel.stateColors.length > 0 ? panel.stateColors : DEFAULT_STATE_COLORS;
 
@@ -49,53 +50,10 @@ export function IndicatorPanel({
     onChange({ stateColors: [...stateColors, { value, label: `State ${value}`, color: UNKNOWN_COLOR }] });
   };
 
-  useEffect(() => {
-    if (!editingColors) return;
-    const closeOutside = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (
-        target
-        && !colorEditorRef.current?.contains(target)
-        && !colorButtonRef.current?.contains(target)
-      ) setEditingColors(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setEditingColors(false);
-    };
-    document.addEventListener('pointerdown', closeOutside);
-    window.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('pointerdown', closeOutside);
-      window.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [editingColors]);
-
   return (
     <div className="indicator-stage">
-      <div className="instrument-config indicator-config">
-        <span>
-          <strong>State palette</strong>
-          <small>
-            {panel.channelGroup ? `Bound group ${panel.channelGroup} · ` : ''}
-            {stateColors.length} mapped values · unmatched values use purple
-          </small>
-        </span>
-        <button
-          ref={colorButtonRef}
-          type="button"
-          className={editingColors ? 'active' : ''}
-          onClick={() => setEditingColors((current) => !current)}
-          aria-expanded={editingColors}
-          aria-label={`Configure colors for ${panel.title}`}
-        >
-          <SlidersHorizontal size={13} />
-          Colors
-        </button>
-      </div>
-
-      {editingColors && (
+      {editingColors && createPortal((
         <div
-          ref={colorEditorRef}
           className="state-color-editor"
           role="dialog"
           aria-label={`State colors for ${panel.title}`}
@@ -143,12 +101,12 @@ export function IndicatorPanel({
             <button type="button" onClick={() => onChange({ stateColors: DEFAULT_STATE_COLORS.map((state) => ({ ...state })) })}>
               Reset defaults
             </button>
-            <button type="button" onClick={() => setEditingColors(false)} aria-label={`Close colors for ${panel.title}`}>
+            <button type="button" onClick={() => onEditingColorsChange(false)} aria-label={`Close colors for ${panel.title}`}>
               <X size={12} /> Done
             </button>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       <div className="indicator-grid">
         {selected.map((channel) => {

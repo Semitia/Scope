@@ -3,13 +3,29 @@ import type { TelemetryData } from './types';
 const MIN_IDLE_GAP_SECONDS = 0.2;
 const IDLE_GAP_INTERVAL_FACTOR = 5;
 const MAX_INTERVAL_SAMPLES = 512;
+const AUTO_WINDOW_TARGET_SAMPLES = 300;
+const AUTO_WINDOW_STEPS = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60] as const;
 
 export interface PreparedTimeline {
   data: TelemetryData;
   latestTime: number;
   gapCount: number;
 }
-function estimateNominalInterval(timestamps: number[]): number {
+
+export interface SamplingEstimate {
+  intervalSeconds: number;
+  frequencyHz: number;
+  gapThresholdSeconds: number;
+  gapCount: number;
+  suggestedWindowSeconds: number;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor((sorted.length - 1) / 2)];
+}
+
+function collectRecentIntervals(timestamps: number[]): number[] {
   const intervals: number[] = [];
   const firstIndex = Math.max(1, timestamps.length - MAX_INTERVAL_SAMPLES);
 
@@ -18,9 +34,40 @@ function estimateNominalInterval(timestamps: number[]): number {
     if (Number.isFinite(interval) && interval > 0.000_001) intervals.push(interval);
   }
 
+  return intervals;
+}
+
+function estimateNominalInterval(timestamps: number[]): number {
+  const intervals = collectRecentIntervals(timestamps);
+
   if (intervals.length === 0) return 1 / 30;
-  intervals.sort((left, right) => left - right);
-  return intervals[Math.floor((intervals.length - 1) / 2)];
+  const initialMedian = median(intervals);
+  const gapThreshold = Math.max(MIN_IDLE_GAP_SECONDS, initialMedian * IDLE_GAP_INTERVAL_FACTOR);
+  const uninterruptedIntervals = intervals.filter((interval) => interval <= gapThreshold);
+  return median(uninterruptedIntervals.length > 0 ? uninterruptedIntervals : intervals);
+}
+
+export function estimateSampling(timestamps: number[]): SamplingEstimate {
+  const intervals = collectRecentIntervals(timestamps);
+  const intervalSeconds = estimateNominalInterval(timestamps);
+  const gapThresholdSeconds = Math.max(
+    MIN_IDLE_GAP_SECONDS,
+    intervalSeconds * IDLE_GAP_INTERVAL_FACTOR,
+  );
+  const desiredWindow = intervalSeconds * AUTO_WINDOW_TARGET_SAMPLES;
+  const suggestedWindowSeconds = AUTO_WINDOW_STEPS.reduce((closest, candidate) => (
+    Math.abs(Math.log(candidate / desiredWindow)) < Math.abs(Math.log(closest / desiredWindow))
+      ? candidate
+      : closest
+  ));
+
+  return {
+    intervalSeconds,
+    frequencyHz: 1 / intervalSeconds,
+    gapThresholdSeconds,
+    gapCount: intervals.filter((interval) => interval > gapThresholdSeconds).length,
+    suggestedWindowSeconds: timestamps.length >= 4 ? suggestedWindowSeconds : 10,
+  };
 }
 
 export function prepareTimeline(
