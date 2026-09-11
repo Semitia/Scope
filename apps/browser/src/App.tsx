@@ -122,6 +122,7 @@ interface WorkspaceConfigFile {
   exportedAt: string;
   sourceName: string;
   panels: PanelDefinition[];
+  channelStyles?: Record<string, StoredChannelStyle>;
 }
 
 interface WorkspaceFeedback {
@@ -619,6 +620,10 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
         && typeof panel.manualMax === 'number'
         && Number.isFinite(panel.manualMax);
       if (strict && !validRange) fail(`Value Bars panel ${panelIndex + 1} has an invalid range.`);
+      if (strict && panel.channelRanges !== undefined && (!panel.channelRanges
+        || typeof panel.channelRanges !== 'object' || Array.isArray(panel.channelRanges))) {
+        fail(`Value Bars panel ${panelIndex + 1} has invalid per-channel ranges.`);
+      }
       const rawChannelRanges = panel.channelRanges && typeof panel.channelRanges === 'object'
         && !Array.isArray(panel.channelRanges)
         ? Object.entries(panel.channelRanges as Record<string, unknown>)
@@ -668,12 +673,7 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
           || typeof candidate.color !== 'string'
           || !/^#[0-9a-f]{6}$/i.test(candidate.color)
         ) return [];
-        const color = candidate.value === 0
-          && candidate.label === 'Off'
-          && candidate.color.toLowerCase() === '#718096'
-          ? '#b8c0c8'
-          : candidate.color;
-        return [{ value: candidate.value, label: candidate.label, color }];
+        return [{ value: candidate.value, label: candidate.label, color: candidate.color }];
       });
       const distinctStateValues = new Set(stateColors.map((state) => state.value));
       if (strict && (
@@ -720,12 +720,20 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
     )) {
       fail(`Waveform panel ${panelIndex + 1} has an invalid time window.`);
     }
+    const rawYRange = panel.manualYRange as { min?: unknown; max?: unknown } | undefined;
+    const validYRange = rawYRange && typeof rawYRange === 'object' && !Array.isArray(rawYRange)
+      && typeof rawYRange.min === 'number' && Number.isFinite(rawYRange.min)
+      && typeof rawYRange.max === 'number' && Number.isFinite(rawYRange.max) && rawYRange.min < rawYRange.max;
+    if (strict && panel.manualYRange !== undefined && !validYRange) {
+      fail(`Waveform panel ${panelIndex + 1} has an invalid manual Y-axis range.`);
+    }
     const storedWindowSeconds = typeof panel.windowSeconds === 'number' && Number.isFinite(panel.windowSeconds)
       ? clampWindowSeconds(panel.windowSeconds)
       : 10;
     panels.push({
       ...base,
       type: 'scope',
+      ...(validYRange ? { manualYRange: { min: rawYRange.min as number, max: rawYRange.max as number } } : {}),
       yScaleMode: validYScaleMode
         ? panel.yScaleMode as YScaleMode
         : panel.autoY === false ? 'manual' : 'fit',
@@ -750,6 +758,31 @@ function initialScopeLayouts(): ScopeLayouts {
   }
 }
 
+function parseWorkspaceStyles(value: unknown): Record<string, StoredChannelStyle> | undefined {
+  if (value === undefined) return undefined; // Version 1 files originally omitted styles.
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Workspace channel styles must be an object.');
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, raw]) => {
+    const style = raw as StoredChannelStyle | null;
+    if (!key || key.length > 1024 || !style || typeof style !== 'object' || Array.isArray(style)
+      || typeof style.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(style.color)
+      || !['linear', 'smooth', 'stepped'].includes(style.lineCurve)
+      || !['solid', 'dashed', 'dotted', 'dashdot'].includes(style.linePattern)
+      || ![1, 1.5, 2, 2.5, 3].includes(style.lineWidth)
+      || (style.opacity !== undefined && (typeof style.opacity !== 'number'
+        || !Number.isFinite(style.opacity) || style.opacity < 0.1 || style.opacity > 1))) {
+      throw new Error(`Invalid channel style for "${key}".`);
+    }
+    return [key, storedStyle(style)];
+  }));
+}
+
+function storedStyle(channel: StoredChannelStyle): StoredChannelStyle {
+  return { color: channel.color, lineCurve: channel.lineCurve, linePattern: channel.linePattern,
+    lineWidth: channel.lineWidth, opacity: channel.opacity ?? 1 };
+}
+
 function parseWorkspaceConfig(value: unknown): WorkspaceConfigFile {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('The workspace file must contain a JSON object.');
@@ -767,6 +800,7 @@ function parseWorkspaceConfig(value: unknown): WorkspaceConfigFile {
     exportedAt: typeof config.exportedAt === 'string' ? config.exportedAt : '',
     sourceName: typeof config.sourceName === 'string' ? config.sourceName : '',
     panels: parsePanelDefinitions(config.panels, true),
+    channelStyles: parseWorkspaceStyles(config.channelStyles),
   };
 }
 
@@ -871,10 +905,25 @@ export default function App() {
   const channels = useMemo(
     () => rawChannels.map((channel) => ({
       ...channel,
+      ...(!scopeLayouts[sourceKeys.get(channel.sourceId) ?? '']?.length
+        ? channelStyles[`${WORKSPACE_TEMPLATE_KEY}:${channel.key}`] ?? {} : {}),
       ...(channelStyles[styleKeyFor(channel)] ?? {}),
     })),
-    [channelStyles, rawChannels, styleKeyFor],
+    [channelStyles, rawChannels, styleKeyFor, scopeLayouts, sourceKeys],
   );
+  // Materialize inherited styles before a newly connected source edits its template layout.
+  useEffect(() => {
+    const programKey = activeSource?.programKey;
+    if (!programKey || scopeLayouts[programKey]?.length) return;
+    setChannelStyles(current => {
+      const templatePrefix = `${WORKSPACE_TEMPLATE_KEY}:`;
+      const inherited = Object.entries(current).filter(([key]) => key.startsWith(templatePrefix));
+      const missing = inherited.filter(([key]) => !Object.hasOwn(current, `${programKey}:${key.slice(templatePrefix.length)}`));
+      if (!missing.length) return current;
+      return { ...current, ...Object.fromEntries(missing.map(([key, style]) =>
+        [`${programKey}:${key.slice(templatePrefix.length)}`, style])) };
+    });
+  }, [activeSource?.programKey, scopeLayouts]);
   const layoutKey = activeSource?.programKey ?? WORKSPACE_TEMPLATE_KEY;
   const defaultScope = useMemo<PanelDefinition>(() => ({
     id: `scope-default:${layoutKey ?? 'waiting'}`,
@@ -1649,12 +1698,25 @@ export default function App() {
 
   const exportWorkspace = () => {
     const sourceName = activeSource?.name ?? 'Offline template';
+    // Use portable channel names, without the local Hub URL or program identity.
+    // Include stored offline channels as well as effective defaults for live channels.
+    const sourcePrefix = `${layoutKey}:`;
+    const templatePrefix = `${WORKSPACE_TEMPLATE_KEY}:`;
+    const stylesWithPrefix = (prefix: string) => Object.entries(channelStyles)
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([key, style]) => [key.slice(prefix.length), storedStyle(style)] as const);
+    const exportedStyles = Object.fromEntries([
+      ...(!scopeLayouts[layoutKey]?.length ? stylesWithPrefix(templatePrefix) : []),
+      ...stylesWithPrefix(sourcePrefix),
+      ...channels.map(channel => [channel.key, storedStyle(channel)] as const),
+    ]);
     const config: WorkspaceConfigFile = {
       schema: WORKSPACE_CONFIG_SCHEMA,
       version: WORKSPACE_CONFIG_VERSION,
       exportedAt: new Date().toISOString(),
       sourceName,
       panels: scopePanels,
+      channelStyles: exportedStyles,
     };
     const url = URL.createObjectURL(new Blob(
       [JSON.stringify(config, null, 2)],
@@ -1684,6 +1746,14 @@ export default function App() {
     }
     try {
       const config = parseWorkspaceConfig(JSON.parse(await file.text()) as unknown);
+      if (config.channelStyles !== undefined) {
+        setChannelStyles(current => {
+          const prefix = `${layoutKey}:`;
+          const next = Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(prefix)));
+          for (const [key, style] of Object.entries(config.channelStyles!)) next[`${prefix}${key}`] = style;
+          return next;
+        });
+      }
       setScopeLayouts((current) => ({ ...current, [layoutKey]: config.panels }));
       setCollapsedPanels((current) => ({ ...current, [layoutKey]: [] }));
       setActiveScopeId(config.panels[0]?.id ?? null);
@@ -1733,6 +1803,9 @@ export default function App() {
     setChannelStyles((current) => {
       const next = { ...current };
       delete next[key];
+      // A local reset must also override an imported offline template style.
+      const original = rawChannels.find(item => item.id === channel.id);
+      if (original && current[`${WORKSPACE_TEMPLATE_KEY}:${channel.key}`]) next[key] = storedStyle(original);
       return next;
     });
   };
@@ -2463,6 +2536,8 @@ export default function App() {
                       : panel.windowSeconds}
                     pausedAt={pausedAt}
                     yScaleMode={panel.yScaleMode}
+                    manualYRange={panel.manualYRange}
+                    onManualYRangeChange={manualYRange => updatePanel(panel.id, { manualYRange })}
                     theme={theme}
                     fontScale={settings.fontScale}
                     scrollWhenIdle={settings.scrollWhenIdle}
@@ -2755,7 +2830,7 @@ export default function App() {
                 <span className="settings-entry-copy">
                   <strong>Portable panel configuration</strong>
                   <small>
-                    Includes panel types, grid positions, channel bindings, ranges, and state colors.
+                    Includes panel layouts, channel bindings, signal colors and line styles, ranges, and state colors.
                   </small>
                 </span>
                 <div className="workspace-settings-actions">

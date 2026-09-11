@@ -3523,3 +3523,6 @@ select:focus-visible,
     inset 0 -3px 3px -3px var(--dock-shade),
     inset 1px 0 var(--dock-highlight);
 }
+
+.wristed-topbar .wristed-appearance[aria-pressed="true"] { color: #185b83; background: #e2f0f7; border-color: #99bfd3; }
+.wristed-model-notice { position: absolute; top: 45px; left: 12px; color: #627385; font-size: 11px; pointer-events: none; }

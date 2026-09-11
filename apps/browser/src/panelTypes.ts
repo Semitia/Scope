@@ -27,6 +27,7 @@ interface BasePanelDefinition {
 export interface ScopePanelDefinition extends BasePanelDefinition {
   type: 'scope';
   yScaleMode: YScaleMode;
+  manualYRange?: { min: number; max: number };
   windowMode: 'auto' | 'manual';
   windowSeconds: number;
 }

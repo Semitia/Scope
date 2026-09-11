@@ -117,7 +117,7 @@ stay separate.
 
 - add waveform, Value Bars, and Indicators panels; each panel keeps independent channel bindings and configuration;
 - prepare and persist the workspace even before a producer connects, then inherit it for newly discovered programs;
-- export or import a portable Workspace JSON containing panel types, grid positions, channel bindings, ranges, and indicator state colors;
+- export or import a portable Workspace JSON containing panel types, grid positions, channel bindings, signal colors/curves/patterns/widths/opacity, ranges, and indicator state colors;
 - drag panels on a 12-column desktop grid, resize them from the lower-right corner, and arrange side-by-side columns without overlap;
 - bind Value Bars to individual channels or a numbered channel group; click either endpoint value to set that bar's manual range, then use its center icon to restore/relearn the automatic history range;
 - bind Indicators to individual channels or numbered channel groups such as `limit.0..N`, with customizable colors and labels for boolean/enumerated states;
@@ -148,7 +148,17 @@ WebSocket endpoint; UDP producers still send to that Hub's UDP address and port.
 
 Panels use a persistent 12-column desktop grid. Drag the grip in a panel header to move it, double-click its title to rename it, and use the lower-right handle to resize it; panels snap to the grid and push colliding panels downward. Narrow browser windows automatically switch to a readable single-column layout while preserving the saved desktop arrangement.
 
-Open **Settings → Workspace** to export the current program layout or offline template as a `.workspace.json` file. Importing a file replaces the current workspace after validating its schema and panel definitions; it does not change the telemetry protocol or require a connected producer.
+Open **Settings → Workspace** to export the current program layout or offline template as a `.workspace.json` file. Importing a file replaces the current workspace after validating its schema, panel definitions, and channel styles; it does not change the telemetry protocol or require a connected producer.
+
+Workspace exports include `channelStyles`, keyed by channel name so styles transfer across Hub addresses and program identities. Old version 1 files without this field remain importable and leave existing local styles unchanged. They cannot restore styles that were never exported.
+
+The workspace also preserves Bar panel defaults and per-channel manual bounds/modes,
+indicator value/label/color mappings, channel/group bindings, waveform time-window
+settings and manual Y bounds, and all 3D instrument parameters and appearance.
+Automatic Bar ranges are relearned from incoming data; they are not fixed limits.
+A per-channel range applies to the exact channel key (`psi.0` and `psi_deg.0` are
+separate channels). Choose manual mode to retain fixed minimum/maximum values.
+
 
 ## VS Code preview
 

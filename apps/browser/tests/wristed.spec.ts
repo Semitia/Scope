@@ -163,3 +163,77 @@ test('3D wheel requires Ctrl and ordinary wheel scrolls the workspace', async ({
   await page.mouse.wheel(0, 160);
   await expect.poll(() => workspace.evaluate(element => element.scrollTop)).toBeGreaterThan(scrollTop);
 });
+
+test('rigid Blender model switches, articulates, resizes, and survives reload', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/?demo=1');
+  await page.getByRole('button', { name: 'Add panel', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Wristed instrument' }).click();
+  const panel = page.getByRole('region', { name: 'Wristed Instrument 1', exact: true });
+  const canvas = panel.locator('canvas');
+  const toggle = panel.getByRole('button', { name: 'Use instrument model', exact: true });
+  await canvas.scrollIntoViewIfNeeded();
+  await expect(canvas).toHaveAttribute('data-model-status', 'ready');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  const tip = panel.locator('.wristed-footer code');
+  const originalTip = await tip.textContent();
+  const lines = await canvas.screenshot();
+  await toggle.click();
+  await expect(canvas).toHaveAttribute('data-appearance', 'model');
+  await expect(tip).toHaveText(originalTip!);
+  expect((await canvas.screenshot()).equals(lines)).toBe(false);
+  await panel.screenshot({ path: '../../artifacts/wristed-model.png' });
+  await panel.getByRole('button', { name: 'Focus wrist detail' }).click();
+  await panel.screenshot({ path: '../../artifacts/wristed-model-detail.png' });
+  await panel.getByRole('button', { name: 'Configure Wristed Instrument 1', exact: true }).click();
+  await page.getByRole('spinbutton', { name: 'alpha manual value' }).fill('0');
+  await page.getByRole('button', { name: 'Close instrument settings' }).click();
+  const closed = await canvas.screenshot();
+  await panel.getByRole('button', { name: 'Configure Wristed Instrument 1', exact: true }).click();
+  await page.getByRole('spinbutton', { name: 'alpha manual value' }).fill('1.2');
+  await page.getByRole('button', { name: 'Close instrument settings' }).click();
+  // Opening only moves the jaws; the wrist XYZ must stay unchanged.
+  await expect(tip).toHaveText(originalTip!);
+  expect((await canvas.screenshot()).equals(closed)).toBe(false);
+  await panel.getByRole('button', { name: 'Configure Wristed Instrument 1', exact: true }).click();
+  await page.getByRole('spinbutton', { name: 'beta1 manual value' }).fill('0.7');
+  await expect(tip).not.toHaveText(originalTip!);
+  await page.getByText('Instrument dimensions', { exact: true }).click();
+  await page.getByRole('spinbutton', { name: 'Jaw length · mm', exact: true }).fill('15');
+  await page.getByRole('button', { name: 'Close instrument settings' }).click();
+  await page.reload();
+  await canvas.scrollIntoViewIfNeeded();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(canvas).toHaveAttribute('data-appearance', 'model');
+  await toggle.click();
+  await expect(canvas).toHaveAttribute('data-appearance', 'lines');
+  await toggle.click();
+  await panel.getByRole('button', { name: 'Collapse Wristed Instrument 1', exact: true }).click();
+  await expect(canvas).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Expand Wristed Instrument 1', exact: true }).click();
+  await expect(canvas).toHaveAttribute('data-appearance', 'model');
+  expect(errors).toEqual([]);
+});
+
+test('missing model keeps a usable line drawing with a visible explanation', async ({ page }) => {
+  await page.route('**/instrument*.glb*', route =>
+    route.request().resourceType() === 'script' ? route.continue() : route.abort());
+  await page.goto('/?demo=1');
+  await page.getByRole('button', { name: 'Add panel', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Wristed instrument' }).click();
+  const panel = page.getByRole('region', { name: 'Wristed Instrument 1', exact: true });
+  await panel.scrollIntoViewIfNeeded();
+  await panel.getByRole('button', { name: 'Use instrument model' }).click();
+  await expect(panel.getByRole('note')).toContainText('模型加载失败');
+  await expect(panel.locator('canvas')).toHaveAttribute('data-appearance', 'lines');
+  await expect(panel.getByRole('status')).toHaveText('MANUAL PREVIEW');
+});
+
+test('older instrument settings default to lines and reject invalid appearance', () => {
+  const { appearance: _, ...legacy } = DEFAULT_WRISTED;
+  expect(parseWristedSettings(legacy, true).appearance).toBe('lines');
+  expect(parseWristedSettings({ ...legacy, appearance: 'model' }, true).appearance).toBe('model');
+  expect(() => parseWristedSettings({ ...legacy, appearance: 'invalid' }, true)).toThrow();
+});

@@ -5,6 +5,7 @@ import type { WristedPanelDefinition } from '../panelTypes';
 import { DIMENSION_FIELDS, POSE_LABELS, type Psi, type WristedSettings } from '../wristed/config';
 import { wristedBindingGroups } from '../wristed/bindings';
 import { FloatingPanel, panelAnchor } from './FloatingPanel';
+import type { ModelStatus } from '../wristed/rigidModel';
 import { createWristedScene } from '../wristed/scene';
 
 const POSE_SYMBOLS = ['l', 'φ', 'θ₁', 'δ₁', 'β₁', 'β₂', 'α'];
@@ -22,6 +23,7 @@ export default function WristedInstrumentPanel({ panel, channels, latest, channe
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<ReturnType<typeof createWristedScene> | null>(null);
   const [error, setError] = useState('');
+  const [modelStatus, setModelStatus] = useState<ModelStatus>('loading');
   const [editing, setEditing] = useState(false);
   const [tip, setTip] = useState([0, 0, 0]);
   const settings = panel.wristed;
@@ -52,7 +54,7 @@ export default function WristedInstrumentPanel({ panel, channels, latest, channe
   const dimensionsKey = JSON.stringify(settings.dimensions);
   useEffect(() => {
     if (!host.current) return;
-    try { scene.current = createWristedScene(host.current); }
+    try { scene.current = createWristedScene(host.current, setModelStatus); }
     catch { setError('3D rendering is unavailable. Enable WebGL 2 / hardware acceleration and reopen this panel.'); }
     return () => { scene.current?.dispose(); scene.current = null; };
   }, []);
@@ -63,6 +65,7 @@ export default function WristedInstrumentPanel({ panel, channels, latest, channe
     // Pose and dimensions are compared by value to avoid updating meshes on unrelated telemetry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [poseKey, dimensionsKey, valid]);
+  useEffect(() => { scene.current?.setAppearance(settings.appearance ?? 'lines'); }, [settings.appearance]);
   const update = (patch: Partial<WristedSettings>) => {
     const wristed = { ...settings, ...patch };
     onChange({ wristed, channelKeys: [...new Set(wristed.bindings.filter(Boolean))] });
@@ -74,12 +77,19 @@ export default function WristedInstrumentPanel({ panel, channels, latest, channe
         {error ? '3D UNAVAILABLE' : !valid ? 'WAITING / INVALID INPUT' : paused && bound ? 'PAUSED' : bound ? `LIVE · ${bound}/7 BOUND` : 'MANUAL PREVIEW'}
       </span>
       <div>
+        <button type="button" className="wristed-appearance" aria-label="Use instrument model" aria-pressed={settings.appearance === 'model'}
+          title="Switch between line drawing and rigid model" onClick={() => update({ appearance: settings.appearance === 'model' ? 'lines' : 'model' })}>
+          {settings.appearance === 'model' ? '模型' : '线条'}
+        </button>
         <button type="button" onClick={() => scene.current?.focusWrist()} title="Inspect wrist and jaws" aria-label="Focus wrist detail"><Focus size={13} /> Wrist</button>
         <button type="button" onClick={() => scene.current?.fit()} title="Fit instrument in view" aria-label="Fit instrument in view"><RotateCcw size={13} /> Fit</button>
         <button type="button" data-instrument-settings-trigger onClick={() => setEditing(v => !v)} aria-expanded={editing} aria-label={`Configure ${panel.title}`}><Settings2 size={13} /> Configure</button>
       </div>
     </div>
     {error && <div className="wristed-error" role="alert">{error}</div>}
+    {settings.appearance === 'model' && modelStatus !== 'ready' && !error && <div className="wristed-model-notice" role="note">
+      {modelStatus === 'loading' ? '模型加载中…' : '模型加载失败，暂时显示线条。重新打开面板可重试。'}
+    </div>}
     {!valid && !error && <div className="wristed-warning">{unavailable.length ? `Waiting for ${unavailable.join(', ')}. Last valid pose retained.` : 'Input outside supported range. Last valid pose retained.'}</div>}
     <div className="wristed-footer"><span>Drag to orbit · Ctrl+Scroll to zoom · Shift-drag / right-drag to pan</span><code>WRIST XYZ {tip.map(v => v.toFixed(2)).join(' / ')} mm</code><span><i className="axis-x">X</i> <i className="axis-y">Y</i> <i className="axis-z">Z</i></span></div>
     {editing && <FloatingPanel className="wristed-settings" label={`Instrument settings for ${panel.title}`} width={440}

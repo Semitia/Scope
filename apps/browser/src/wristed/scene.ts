@@ -1,7 +1,9 @@
 import * as T from 'three';
 import { circlePoints, disposeDrawingGeometry, halfRoundDrawing, polyline, stroke, updatePolyline } from './drawing';
+import { createContinuumSurface } from './continuumSurface';
 import { createCameraControls } from './cameraControls';
-import type { Psi, WristedDimensions } from './config';
+import { createRigidModel, type ModelStatus } from './rigidModel';
+import type { InstrumentAppearance, Psi, WristedDimensions } from './config';
 import { positionOf, rx, ry, segmentFrame, tz, wristedFrames } from './kinematics';
 
 const STEPS = 128;
@@ -11,7 +13,7 @@ function setFrame(object: T.Object3D, frame: T.Matrix4) {
   object.matrixWorldNeedsUpdate = true;
 }
 
-export function createWristedScene(host: HTMLDivElement) {
+export function createWristedScene(host: HTMLDivElement, onModelStatus: (status: ModelStatus) => void = () => {}) {
   const renderer = new T.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setClearColor(0xffffff, 1);
@@ -23,6 +25,11 @@ export function createWristedScene(host: HTMLDivElement) {
   const scene = new T.Scene();
   const model = new T.Group();
   scene.add(model);
+  scene.add(new T.HemisphereLight(0xffffff, 0x6b7480, 2.6));
+  const keyLight = new T.DirectionalLight(0xfff3e1, 3.2);
+  keyLight.position.set(80, -120, 160); scene.add(keyLight);
+  const fillLight = new T.DirectionalLight(0xd8eaff, 2.4);
+  fillLight.position.set(-100, 60, 50); scene.add(fillLight);
   const camera = new T.PerspectiveCamera(35, 1, 0.01, 100000);
   camera.up.set(0, 0, 1);
   // Keep native events inside the canvas. Other listeners on this same target
@@ -91,6 +98,7 @@ export function createWristedScene(host: HTMLDivElement) {
   const discMaterial = faceMaterial(0x4488b5, 0.12);
   const centerMaterial = new T.LineDashedMaterial({ color: 0x859ba9, dashSize: 1.4, gapSize: 1.4 });
   const discGeometry = new T.CircleGeometry(1, 96);
+  const sleeveMaterial = new T.MeshStandardMaterial({ color: 0x08090a, roughness: 0.85, metalness: 0 });
   const sections = Array.from({ length: 3 }, (_, sectionIndex) => {
     const group = new T.Group(); model.add(group);
     const backbones = Array.from({ length: 8 }, () => {
@@ -108,7 +116,9 @@ export function createWristedScene(host: HTMLDivElement) {
     const center = new T.Line(new T.BufferGeometry().setAttribute('position',
       new T.BufferAttribute(new Float32Array((STEPS + 1) * 3), 3)), centerMaterial);
     center.frustumCulled = false; group.add(center);
-    return { group, backbones, discs, center };
+    const sleeve = sectionIndex < 2 ? createContinuumSurface(STEPS, sleeveMaterial) : undefined;
+    if (sleeve) model.add(sleeve.mesh);
+    return { group, backbones, discs, center, sleeve, active: false };
   });
   const blocks = Array.from({ length: 3 }, () => {
     const group = new T.Group(); model.add(group); return group;
@@ -125,6 +135,29 @@ export function createWristedScene(host: HTMLDivElement) {
       pendingFrame = 0; renderer.render(scene, camera);
     });
   };
+  let appearance: InstrumentAppearance = 'lines';
+  let modelStatus: ModelStatus = 'loading';
+  const rigid = createRigidModel(status => {
+    modelStatus = status;
+    applyAppearance();
+    onModelStatus(status);
+    if (status === 'ready' && appearance === 'model') fit();
+  });
+  model.add(rigid.root);
+  function applyAppearance() {
+    const solid = appearance === 'model' && modelStatus === 'ready';
+    rigid.root.visible = solid;
+    blocks.forEach(block => { block.visible = !solid; });
+    jaws.forEach(jaw => { jaw.visible = !solid; });
+    sections.forEach(section => {
+      section.group.visible = !solid && section.active;
+      if (section.sleeve) section.sleeve.mesh.visible = solid && section.active;
+    });
+    renderer.domElement.dataset.appearance = solid ? 'model' : 'lines';
+    renderer.domElement.dataset.modelStatus = modelStatus;
+    render();
+  }
+  applyAppearance();
   const controls = createCameraControls(camera, renderer.domElement, render);
   const resize = () => {
     const { width, height } = host.getBoundingClientRect();
@@ -138,7 +171,7 @@ export function createWristedScene(host: HTMLDivElement) {
     model.updateMatrixWorld(true);
     const box = new T.Box3();
     // Hidden retracted sections must not keep the camera framed around an old pose.
-    for (const root of wristOnly ? [...blocks, ...jaws, endFrame] : [model]) root.traverseVisible(object => {
+    for (const root of wristOnly ? (rigid.root.visible ? [...rigid.wristRoots(), endFrame] : [...blocks, ...jaws, endFrame]) : [model]) root.traverseVisible(object => {
       const geometry = (object as T.Mesh).geometry;
       if (!geometry) return;
       geometry.computeBoundingBox();
@@ -169,9 +202,10 @@ export function createWristedScene(host: HTMLDivElement) {
     ];
     descriptions.forEach(({ length, theta, base, radius }, sectionIndex) => {
       const section = sections[sectionIndex];
-      section.group.visible = length > 1e-7;
-      if (!section.group.visible) return;
+      section.active = length > 1e-7;
+      if (!section.active) return;
       const frames = Array.from({ length: STEPS + 1 }, (_, i) => base.clone().multiply(segmentFrame(length, theta, f.delta, i / STEPS)));
+      section.sleeve?.update(frames, radius);
       const centerPositions = section.center.geometry.getAttribute('position');
       frames.forEach((frame, i) => { const p = positionOf(frame); centerPositions.setXYZ(i, p.x, p.y, p.z); });
       centerPositions.needsUpdate = true; section.center.computeLineDistances();
@@ -188,13 +222,19 @@ export function createWristedScene(host: HTMLDivElement) {
     setFrame(blocks[2], f.wrist1.clone().multiply(ry(-Math.PI / 2)));
     [f.jawLeft, f.jawRight].forEach((frame, i) => setFrame(jaws[i], frame.clone().scale(new T.Vector3(1, 1, d.jawLength))));
     setFrame(endFrame, f.wrist2);
+    rigid.update(f, d);
+    applyAppearance();
     if (!initialized || dimensionsChanged) { initialized = true; fit(); }
     render();
     return positionOf(f.wrist2);
   }
-  return { update, fit, focusWrist: () => fit(true), dispose() {
+  return { update, fit, setAppearance(value: InstrumentAppearance) {
+    appearance = value; applyAppearance();
+    if (initialized) fit();
+  }, focusWrist: () => fit(true), dispose() {
     disposed = true; cancelAnimationFrame(pendingFrame); observer.disconnect(); controls.dispose();
     isolatedEvents.forEach(type => renderer.domElement.removeEventListener(type, isolate));
+    rigid.dispose();
     const geometries = new Set<T.BufferGeometry>();
     const materials = new Set<T.Material>();
     scene.traverse(object => {

@@ -17,6 +17,8 @@ interface WaveformPlotProps {
   windowSeconds: number;
   pausedAt: number | null;
   yScaleMode: YScaleMode;
+  manualYRange?: { min: number; max: number };
+  onManualYRangeChange?: (range: { min: number; max: number }) => void;
   theme: ThemeMode;
   fontScale?: number;
   scrollWhenIdle: boolean;
@@ -64,6 +66,8 @@ export function WaveformPlot({
   windowSeconds,
   pausedAt,
   yScaleMode,
+  manualYRange,
+  onManualYRangeChange,
   theme,
   fontScale = 1,
   scrollWhenIdle,
@@ -84,6 +88,8 @@ export function WaveformPlot({
   const windowSecondsRef = useRef(windowSeconds);
   const pausedAtRef = useRef(pausedAt);
   const yScaleModeRef = useRef(yScaleMode);
+  const manualYRangeRef = useRef(manualYRange);
+  const onManualYRangeChangeRef = useRef(onManualYRangeChange);
   const scrollWhenIdleRef = useRef(scrollWhenIdle);
   const getClockTimeRef = useRef(getClockTime);
   const onVisiblePointCountRef = useRef(onVisiblePointCount);
@@ -102,7 +108,7 @@ export function WaveformPlot({
   const renderCounterRef = useRef({ count: 0, since: performance.now() });
   const lastMetricsAtRef = useRef(0);
   const lastVisiblePointCountRef = useRef<number | null>(null);
-  const yScaleRef = useRef<{ min: number; max: number } | null>(null);
+  const yScaleRef = useRef<{ min: number; max: number } | null>(manualYRange ?? null);
   const fitManualYRef = useRef(false);
   const refreshViewRef = useRef<(liveEnd: number, forceMetrics?: boolean) => void>(() => {});
   const [hover, setHover] = useState<HoverState | null>(null);
@@ -114,6 +120,8 @@ export function WaveformPlot({
   windowSecondsRef.current = windowSeconds;
   pausedAtRef.current = pausedAt;
   yScaleModeRef.current = yScaleMode;
+  manualYRangeRef.current = manualYRange;
+  onManualYRangeChangeRef.current = onManualYRangeChange;
   scrollWhenIdleRef.current = scrollWhenIdle;
   getClockTimeRef.current = getClockTime;
   onVisiblePointCountRef.current = onVisiblePointCount;
@@ -334,9 +342,15 @@ export function WaveformPlot({
           if (scaleKey !== 'y' || !stageRef.current) return;
           const min = scaledPlot.scales.y.min;
           const max = scaledPlot.scales.y.max;
-          if (Number.isFinite(min) && Number.isFinite(max)) {
+          if (typeof min === 'number' && typeof max === 'number' && Number.isFinite(min) && Number.isFinite(max)) {
             stageRef.current.dataset.yMin = String(min);
             stageRef.current.dataset.yMax = String(max);
+            if (scaledPlot === plotRef.current && yScaleModeRef.current === 'manual' && min < max) {
+              const range = { min, max };
+              yScaleRef.current = range;
+              const saved = manualYRangeRef.current;
+              if (saved?.min !== min || saved?.max !== max) onManualYRangeChangeRef.current?.(range);
+            }
           } else {
             delete stageRef.current.dataset.yMin;
             delete stageRef.current.dataset.yMax;
@@ -359,11 +373,10 @@ export function WaveformPlot({
 
     const plot = new uPlot(options, data as AlignedData, host);
     plotRef.current = plot;
-    if (yScaleModeRef.current === 'manual' && yScaleRef.current) {
-      plot.setScale('y', yScaleRef.current);
+    if (yScaleModeRef.current === 'manual' && (manualYRangeRef.current ?? yScaleRef.current)) {
+      plot.setScale('y', (manualYRangeRef.current ?? yScaleRef.current)!);
     } else if (yScaleModeRef.current === 'manual') {
-      // A persisted manual mode has no in-memory scale after reload. Fit once
-      // so the trace and Y labels are visible, then leave the range manual.
+      // Legacy manual mode without a saved range fits once when data arrives.
       fitManualYRef.current = true;
     }
 
@@ -497,6 +510,23 @@ export function WaveformPlot({
       plotRef.current = null;
     };
   }, [channelSignature]);
+
+  useEffect(() => {
+    const plot = plotRef.current;
+    if (!plot || yScaleMode !== 'manual') return;
+    if (manualYRange) {
+      fitManualYRef.current = false;
+      yScaleRef.current = manualYRange;
+      if (plot.scales.y.min !== manualYRange.min || plot.scales.y.max !== manualYRange.max) {
+        plot.setScale('y', manualYRange);
+      }
+    } else {
+      const { min, max } = plot.scales.y;
+      if (min !== undefined && max !== undefined && Number.isFinite(min) && Number.isFinite(max) && min < max) {
+        onManualYRangeChangeRef.current?.({ min, max });
+      }
+    }
+  }, [yScaleMode, manualYRange?.min, manualYRange?.max]);
 
   useEffect(() => {
     let animationFrame = 0;
