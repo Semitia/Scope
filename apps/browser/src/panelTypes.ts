@@ -1,6 +1,6 @@
 import type { YScaleMode } from './types';
 
-export type PanelType = 'scope' | 'value-bar' | 'indicators';
+export type PanelType = 'scope' | 'value-bar' | 'indicators' | 'sources';
 
 export interface StateColorDefinition {
   value: number;
@@ -51,7 +51,12 @@ export interface IndicatorPanelDefinition extends BasePanelDefinition {
   channelGroup?: string;
 }
 
+export interface SourcesPanelDefinition extends BasePanelDefinition {
+  type: 'sources';
+}
+
 export type PanelDefinition =
+  | SourcesPanelDefinition
   | ScopePanelDefinition
   | ValueBarPanelDefinition
   | IndicatorPanelDefinition;
@@ -64,6 +69,7 @@ export const DEFAULT_STATE_COLORS: StateColorDefinition[] = [
 ];
 
 export function panelTypeLabel(type: PanelType): string {
+  if (type === 'sources') return 'Programs & Channels';
   if (type === 'value-bar') return 'Value bars';
   if (type === 'indicators') return 'Indicators';
   return 'Waveform';

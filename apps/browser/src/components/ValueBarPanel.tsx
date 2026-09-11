@@ -38,6 +38,13 @@ function formatInstrumentValue(value: number): string {
   return INSTRUMENT_NUMBER_FORMAT.format(value);
 }
 
+function formatReading(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  const magnitude = Math.abs(value);
+  if (magnitude >= 10_000 || magnitude > 0 && magnitude < 0.1) return value.toExponential(3);
+  return (Object.is(value, -0) ? 0 : value).toFixed(3);
+}
+
 function paddedRange(min: number, max: number): NumericRange {
   if (min === max) {
     const padding = Math.max(Math.abs(min) * 0.1, 1);
@@ -58,6 +65,10 @@ export function ValueBarPanel({
   const maintainedRanges = useRef(new Map<string, MaintainedRange>());
   const [editingRange, setEditingRange] = useState<RangeEdit | null>(null);
   const selected = channels.filter((channel) => panel.channelKeys.includes(channel.key));
+  const readingCharacters = Math.max(8, ...selected.map(channel => formatReading(
+    latest[channelIndexes.get(channel.id) ?? -1] ?? channel.lastValue ?? 0,
+  ).length));
+  const labelCharacters = Math.max(1, ...selected.map(channel => channel.label.length));
   const manualRangeValid = Number.isFinite(panel.manualMin)
     && Number.isFinite(panel.manualMax)
     && panel.manualMin < panel.manualMax;
@@ -71,7 +82,10 @@ export function ValueBarPanel({
   };
 
   return (
-    <div className="value-bar-stage">
+    <div className="value-bar-stage" style={{
+      '--value-reading-width': `${readingCharacters * 8.4}px`,
+      '--value-label-width': `${Math.min(80, Math.max(16, labelCharacters * 6))}px`,
+    } as React.CSSProperties}>
       <div className="value-bar-list">
         {selected.map((channel) => {
           const index = channelIndexes.get(channel.id) ?? -1;
@@ -118,9 +132,6 @@ export function ValueBarPanel({
           const rawPosition = (value - range.min) / (range.max - range.min);
           const position = Math.max(0, Math.min(1, rawPosition));
           const outOfRange = rawPosition < 0 || rawPosition > 1;
-          const zeroPosition = range.min < 0 && range.max > 0
-            ? (0 - range.min) / (range.max - range.min)
-            : null;
 
           return (
             <article className="value-bar-item" key={channel.id}>
@@ -129,7 +140,7 @@ export function ValueBarPanel({
                   <strong title={channel.key}>{channel.label}</strong>
                 </span>
                 <span className="value-bar-reading">
-                  <b>{formatInstrumentValue(value)}</b>
+                  <b title={String(value)}>{formatReading(value)}</b>
                   <small>{channel.unit || channel.valueType || 'number'}</small>
                   {outOfRange && <em>OUT</em>}
                 </span>
@@ -139,9 +150,6 @@ export function ValueBarPanel({
                 style={{ '--bar-color': channel.color } as React.CSSProperties}
               >
                 <span className="value-bar-fill" style={{ width: `${position * 100}%` }} />
-                {zeroPosition !== null && (
-                  <i className="value-bar-zero" style={{ left: `${zeroPosition * 100}%` }} />
-                )}
                 <span className="value-bar-marker" style={{ left: `${position * 100}%` }} />
               </div>
               <div className="value-bar-scale">

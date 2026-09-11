@@ -40,20 +40,6 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await expect(page.locator('.uplot')).toBeVisible();
   await expect(page.locator('.legend-item')).toHaveCount(4);
 
-  const sidebarResizeHandle = page.getByRole('separator', { name: 'Resize sidebar' });
-  await expect(sidebarResizeHandle).toHaveAttribute('aria-valuenow', '252');
-  const sidebarResizeBox = await sidebarResizeHandle.boundingBox();
-  if (!sidebarResizeBox) throw new Error('Sidebar resize handle is not visible');
-  await page.mouse.move(sidebarResizeBox.x + sidebarResizeBox.width / 2, sidebarResizeBox.y + 80);
-  await page.mouse.down();
-  await page.mouse.move(sidebarResizeBox.x + sidebarResizeBox.width / 2 + 72, sidebarResizeBox.y + 80);
-  await page.mouse.up();
-  await expect(sidebarResizeHandle).toHaveAttribute('aria-valuenow', '324');
-  await page.reload();
-  await expect(sidebarResizeHandle).toHaveAttribute('aria-valuenow', '324');
-  await sidebarResizeHandle.dblclick();
-  await expect(sidebarResizeHandle).toHaveAttribute('aria-valuenow', '252');
-
   await page.waitForTimeout(1_200);
   await page.screenshot({ path: '../../artifacts/debugscope-1440x900.png', fullPage: true });
 
@@ -107,7 +93,7 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await scopeTwoPicker.getByRole('checkbox').filter({ hasText: 'Error' }).click();
   await page.screenshot({ path: '../../artifacts/debugscope-scope-picker.png', fullPage: true });
   await page.getByRole('button', { name: 'Close channels for Scope 2' }).click();
-  await expect(page.locator('.scope-panel')).toHaveCount(2);
+  await expect(page.locator('.scope-panel:not(.panel-sources)')).toHaveCount(2);
   await expect(page.getByRole('region', { name: 'Scope 2' }).locator('.legend-item')).toHaveCount(2);
   await page.getByRole('button', { name: 'Activate Scope 2' }).dblclick();
   const scopeTitleInput = page.getByRole('textbox', { name: 'Rename Scope 2' });
@@ -129,7 +115,7 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await page.screenshot({ path: '../../artifacts/debugscope-multiple-scopes.png', fullPage: true });
 
   await page.reload();
-  await expect(page.locator('.scope-panel')).toHaveCount(2);
+  await expect(page.locator('.scope-panel:not(.panel-sources)')).toHaveCount(2);
   await expect(page.getByRole('region', { name: 'Aux scope' }).locator('.legend-item')).toHaveCount(2);
   await expect(page.getByRole('region', { name: 'Aux scope' })
     .getByLabel('Y axis mode for Aux scope')).toHaveValue('manual');
@@ -140,7 +126,7 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await page.getByRole('button', { name: 'Activate Scope 1' }).click();
   await expect(page.locator('.channel-heading .channel-count')).toHaveText('4 / 7');
   await page.getByRole('button', { name: 'Delete Aux scope' }).click();
-  await expect(page.locator('.scope-panel')).toHaveCount(1);
+  await expect(page.locator('.scope-panel:not(.panel-sources)')).toHaveCount(1);
 
   await page.getByRole('button', { name: /Pause/ }).click();
   await expect(page.getByText('PAUSED')).toBeVisible();
@@ -217,22 +203,27 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
 
   const gridWidth = (await page.locator('.scope-grid').boundingBox())?.width ?? 1_000;
   const scopeOne = page.getByRole('region', { name: 'Scope 1' });
-  await dragBy(page, scopeOne.getByRole('button', { name: 'Resize Scope 1' }), -gridWidth / 2, 0);
+  await dragBy(page, scopeOne.getByRole('button', { name: 'Move Scope 1' }), -gridWidth, 400);
+  await dragBy(page, scopeOne.getByRole('button', { name: 'Resize Scope 1' }), -gridWidth / 4, 0);
   await expect(scopeOne).toHaveAttribute('data-grid-width', '6');
-  await dragBy(page, valuePanel.getByRole('button', { name: 'Resize Value Bars 1' }), -gridWidth / 2, 0);
+  await dragBy(page, valuePanel.getByRole('button', { name: 'Resize Value Bars 1' }), -gridWidth, 0);
   await dragBy(
     page,
     valuePanel.getByRole('button', { name: 'Move Value Bars 1' }),
-    gridWidth / 2 + 6,
+    gridWidth,
     -8 * 84,
   );
-  await expect(valuePanel).toHaveAttribute('data-grid-x', '6');
-  await expect(valuePanel).toHaveAttribute('data-grid-y', '0');
+  await expect(valuePanel).toHaveAttribute('data-grid-x', '10');
+  const valueY = Number(await valuePanel.getAttribute('data-grid-y'));
   const leftBounds = await scopeOne.boundingBox();
   const rightBounds = await valuePanel.boundingBox();
   expect(leftBounds).not.toBeNull();
   expect(rightBounds).not.toBeNull();
-  expect(Math.abs(rightBounds!.x - (leftBounds!.x + leftBounds!.width))).toBeLessThanOrEqual(1);
+  await expect.poll(async () => {
+    const left = (await scopeOne.boundingBox())!;
+    const right = (await valuePanel.boundingBox())!;
+    return Math.max(0, left.x + left.width - right.x);
+  }).toBeLessThanOrEqual(1);
   await expect(page.locator('.workspace')).toHaveCSS('padding', '0px');
   await expect(page.locator('.scope-grid')).toHaveCSS('gap', '0px');
 
@@ -266,9 +257,9 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await page.screenshot({ path: '../../artifacts/debugscope-instruments.png', fullPage: true });
 
   await page.reload();
-  await expect(page.locator('.scope-panel')).toHaveCount(3);
+  await expect(page.locator('.scope-panel:not(.panel-sources)')).toHaveCount(3);
   await expect(page.getByRole('region', { name: 'Scope 1' })).toHaveAttribute('data-grid-width', '6');
-  await expect(page.getByRole('region', { name: 'Value Bars 1' })).toHaveAttribute('data-grid-x', '6');
+  await expect(page.getByRole('region', { name: 'Value Bars 1' })).toHaveAttribute('data-grid-x', '10');
   await expect(page.getByRole('region', { name: 'Value Bars 1' }).locator('.value-bar-item')).toHaveCount(2);
   await expect(page.getByRole('region', { name: 'Value Bars 1' })
     .getByRole('button', { name: 'Edit minimum for Target' })).toHaveText('800');
@@ -290,7 +281,7 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   };
   expect(workspace.schema).toBe('debugscope.workspace');
   expect(workspace.version).toBe(1);
-  expect(workspace.panels).toHaveLength(3);
+  expect(workspace.panels).toHaveLength(4);
   expect(workspace.panels.find((panel) => panel.type === 'scope')).toMatchObject({
     yScaleMode: 'fit',
     windowSeconds: 10,
@@ -303,7 +294,7 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
     channelRanges: {
       'controller.target': { mode: 'manual', min: 800, max: 1600 },
     },
-    layout: { x: 6, y: 0, width: 6 },
+    layout: { x: 10, y: valueY, width: 2 },
   });
   expect(workspace.panels.find((panel) => panel.type === 'indicators')).toMatchObject({
     channelGroup: 'limit',
@@ -311,13 +302,13 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await page.getByRole('button', { name: 'Close settings panel' }).click();
 
   await page.getByRole('button', { name: 'Delete Indicators 1' }).click();
-  await expect(page.locator('.scope-panel')).toHaveCount(2);
+  await expect(page.locator('.scope-panel:not(.panel-sources)')).toHaveCount(2);
   await openSettings.click();
   await settingsPanel.getByLabel('Import workspace configuration').setInputFiles(downloadPath);
-  await expect(settingsPanel.getByRole('status')).toContainText('Imported 3 panels');
+  await expect(settingsPanel.getByRole('status')).toContainText('Imported 4 panels');
   await page.getByRole('button', { name: 'Close settings panel' }).click();
-  await expect(page.locator('.scope-panel')).toHaveCount(3);
-  await expect(page.getByRole('region', { name: 'Value Bars 1' })).toHaveAttribute('data-grid-x', '6');
+  await expect(page.locator('.scope-panel:not(.panel-sources)')).toHaveCount(3);
+  await expect(page.getByRole('region', { name: 'Value Bars 1' })).toHaveAttribute('data-grid-x', '10');
   await page.getByRole('region', { name: 'Indicators 1' })
     .getByRole('button', { name: 'Configure colors for Indicators 1' })
     .click();
@@ -371,20 +362,16 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   expect(consoleErrors).toEqual([]);
 });
 
-test('compact layout keeps the waveform primary', async ({ page }) => {
+test('compact layout includes the default configuration panel in the flow', async ({ page }) => {
   await page.setViewportSize({ width: 760, height: 720 });
   await page.goto('/?demo=1');
-
-  const menu = page.getByRole('button', { name: 'Open channels' });
-  await expect(menu).toBeVisible();
-  await menu.click();
-  await expect(page.locator('.sidebar')).toBeVisible();
-  await page.waitForTimeout(220);
-  await page.screenshot({ path: '../../artifacts/debugscope-760x720.png', fullPage: true });
-
-  await page.locator('.sidebar-toggle').click();
-  await expect(page.locator('.sidebar')).toBeHidden();
-  await expect(page.locator('.scope-panel')).toBeVisible();
+  const sources = page.getByRole('region', { name: 'Programs & Channels', exact: true });
+  const scope = page.getByRole('region', { name: 'Scope 1', exact: true });
+  await expect(sources).toBeVisible();
+  const before = (await scope.boundingBox())!.y;
+  await sources.getByRole('button', { name: 'Collapse Programs & Channels', exact: true }).click();
+  await expect.poll(async () => Math.round((await sources.boundingBox())!.height)).toBe(28);
+  await expect.poll(async () => (await scope.boundingBox())!.y).toBeLessThan(before);
 });
 
 test('workspace panels collapse and reflow vertically', async ({ page }) => {
@@ -406,16 +393,16 @@ test('workspace panels collapse and reflow vertically', async ({ page }) => {
   await scope.getByRole('button', { name: 'Collapse Scope 1' }).click();
   await reflowStarted;
   await expect(scope).toHaveAttribute('aria-expanded', 'false');
-  await expect(scope).toHaveAttribute('data-grid-height', String(1 / 3));
-  await expect.poll(async () => Math.round((await scope.boundingBox())?.height ?? 0)).toBe(28);
+  await expect(scope).toHaveAttribute('data-grid-height', '0.5');
+  await expect.poll(async () => Math.round((await scope.boundingBox())?.height ?? 0)).toBe(42);
   await expect(scope.locator('.plot-stage')).toHaveCount(0);
-  await expect(valueBars).toHaveAttribute('data-grid-y', String(1 / 3));
+  await expect(valueBars).toHaveAttribute('data-grid-y', '4');
 
   await page.reload();
   const restoredScope = page.getByRole('region', { name: 'Scope 1' });
   const restoredValueBars = page.getByRole('region', { name: 'Value Bars 1' });
   await expect(restoredScope).toHaveAttribute('aria-expanded', 'false');
-  await expect(restoredValueBars).toHaveAttribute('data-grid-y', String(1 / 3));
+  await expect(restoredValueBars).toHaveAttribute('data-grid-y', '4');
 
   await restoredScope.getByRole('button', { name: 'Expand Scope 1' }).click();
   await expect(restoredScope).toHaveAttribute('data-grid-height', '8');
@@ -438,38 +425,359 @@ test('workspace panels can be prepared without a producer', async ({ page }) => 
   await page.getByRole('button', { name: 'Close channels for Indicators 1' }).click();
   await expect(page.getByText('No state channels selected')).toBeVisible();
   await page.reload();
-  await expect(page.locator('.scope-panel')).toHaveCount(3);
+  await expect(page.locator('.scope-panel:not(.panel-sources)')).toHaveCount(3);
   await expect(page.getByRole('region', { name: 'Value Bars 1' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Indicators 1' })).toBeVisible();
 });
 
 
-test('interface styles and sidebar visibility persist with thin collapsed headers', async ({ page }) => {
+test('interface styles and configuration sections persist with thin panel headers', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?demo=1');
   await expect(page.locator('.sidebar-footer')).toHaveCount(0);
   await expect(page.locator('.brand-mark')).not.toHaveAttribute('role', 'button');
-  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
-  await expect(page.locator('.sidebar')).toBeHidden();
-  await expect(page.locator('.workspace')).toHaveJSProperty('offsetLeft', 0);
+  await expect(page.locator('.sidebar-toggle')).toBeHidden();
+  const channelsTop = (await page.locator('.channels-section').boundingBox())?.y ?? 0;
+  await page.getByRole('button', { name: 'Collapse programs', exact: true }).click();
+  await expect(page.locator('.source-list')).toHaveCount(0);
+  await expect.poll(async () => (await page.locator('.channels-section').boundingBox())?.y ?? 0)
+    .toBeLessThan(channelsTop);
+  await page.getByRole('button', { name: 'Collapse channels', exact: true }).click();
+  await expect(page.locator('.search-box')).toHaveCount(0);
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByLabel('Interface style').selectOption('cards');
   await page.keyboard.press('Escape');
   await expect(page.locator('.workspace')).toHaveCSS('padding', '12px');
-  await expect(page.locator('.scope-panel').first()).toHaveCSS('border-radius', '8px');
+  await expect(page.locator('.scope-panel:not(.panel-sources)').first()).toHaveCSS('border-radius', '8px');
   const scope = page.getByRole('region', { name: 'Scope 1' });
   await scope.getByRole('button', { name: 'Collapse Scope 1', exact: true }).click();
-  await expect.poll(async () => Math.round((await scope.boundingBox())!.height)).toBe(28);
+  await expect.poll(async () => Math.round((await scope.boundingBox())!.height)).toBe(30);
   await page.reload();
   await expect(page.locator('.app-shell')).toHaveAttribute('data-visual-style', 'cards');
-  await expect(page.locator('.sidebar')).toBeHidden();
-  await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
-  await expect(page.locator('.sidebar')).toBeVisible();
+  await expect(page.locator('.panel-sources')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Expand programs', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Expand channels', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Expand programs', exact: true }).click();
+  await page.getByRole('button', { name: 'Expand channels', exact: true }).click();
+  await expect(page.locator('.source-list')).toBeVisible();
+  await expect(page.locator('.search-box')).toBeVisible();
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByLabel('Interface style').selectOption('compact');
   await page.keyboard.press('Escape');
-  await expect.poll(async () => Math.round((await scope.boundingBox())!.height)).toBe(28);
+  await expect.poll(async () => Math.round((await scope.boundingBox())!.height)).toBe(42);
   await expect(page.locator('.workspace')).toHaveCSS('padding', '0px');
   await scope.getByRole('button', { name: 'Expand Scope 1', exact: true }).click();
   await expect(scope.locator('.scope-y-control')).toHaveCSS('height', '22px');
 });
+
+test('configuration is a persistent movable grid panel and frees space when collapsed', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?demo=1');
+  const sources = page.getByRole('region', { name: 'Programs & Channels', exact: true });
+  const scope = page.getByRole('region', { name: 'Scope 1', exact: true });
+  await expect(page.locator('.scope-grid > .panel-sources')).toHaveCount(1);
+  await expect(page.locator('.sidebar')).toHaveCount(0);
+  await expect(sources).toHaveAttribute('data-grid-x', '0');
+  await expect(sources).toHaveAttribute('data-grid-width', '3');
+  await expect(scope).toHaveAttribute('data-grid-x', '3');
+  const panelBackground = await scope.evaluate((element) => getComputedStyle(element).backgroundColor);
+  await expect(sources.locator('.sources-panel-content')).toHaveCSS('background-color', panelBackground);
+
+  await expect(scope).toHaveAttribute('data-grid-y', '0');
+  await page.getByRole('button', { name: 'Add panel' }).click();
+  await page.getByRole('menuitem', { name: /Value bars/ }).click();
+  await page.getByRole('button', { name: 'Close channels for Value Bars 1' }).click();
+  const belowSources = page.getByRole('region', { name: 'Value Bars 1', exact: true });
+  const workspaceWidth = (await page.locator('.scope-grid').boundingBox())!.width;
+  await dragBy(page, belowSources.getByRole('button', { name: 'Resize Value Bars 1' }), -workspaceWidth * 0.75, 0);
+  await dragBy(page, belowSources.getByRole('button', { name: 'Move Value Bars 1' }), 0, -325);
+  await expect(belowSources).toHaveAttribute('data-grid-y', '4.25');
+  await sources.getByRole('button', { name: 'Collapse channels', exact: true }).click();
+  await expect(sources.locator('.search-box')).toHaveCount(0);
+  await expect(sources.locator('.source-list')).toBeVisible();
+  await sources.getByRole('button', { name: 'Collapse Programs & Channels', exact: true }).click();
+  await expect(scope).toHaveAttribute('data-grid-y', '0');
+  await expect.poll(async () => Math.round((await sources.boundingBox())!.height)).toBe(42);
+  await page.reload();
+  await expect(sources).toHaveAttribute('aria-expanded', 'false');
+  await expect(belowSources).toHaveAttribute('data-grid-y', '0.5');
+  await expect(scope).toHaveAttribute('data-grid-y', '0');
+  await sources.getByRole('button', { name: 'Expand Programs & Channels', exact: true }).click();
+  await expect(scope).toHaveAttribute('data-grid-y', '0');
+  await expect(sources.getByRole('button', { name: 'Expand channels', exact: true })).toBeVisible();
+  const gridWidth = (await page.locator('.scope-grid').boundingBox())!.width;
+  await dragBy(page, sources.getByRole('button', { name: 'Resize Programs & Channels', exact: true }), gridWidth / 4, 84);
+  await expect(sources).toHaveAttribute('data-grid-width', '6');
+  await expect(sources).toHaveAttribute('data-grid-height', '5');
+  await dragBy(page, sources.getByRole('button', { name: 'Move Programs & Channels', exact: true }), gridWidth / 2, 0);
+  await expect(sources).toHaveAttribute('data-grid-x', '6');
+  await page.reload();
+  await expect(sources).toHaveAttribute('data-grid-x', '6');
+  await expect(sources).toHaveAttribute('data-grid-height', '5');
+});
+
+test('previous top default migrates to the left without losing channels', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('debugscope.scope-layouts.v1', JSON.stringify({
+      __debugscope_workspace_template__: [
+        { id: 'sources-default', type: 'sources', title: 'Programs & Channels', channelKeys: [],
+          layout: { x: 0, y: 0, width: 12, height: 4 } },
+        { id: 'scope-existing', type: 'scope', title: 'Existing scope', channelKeys: ['controller.target'],
+          layout: { x: 0, y: 4, width: 12, height: 8 }, yScaleMode: 'fit', windowMode: 'auto', windowSeconds: 10 },
+      ],
+    }));
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?demo=1');
+  await expect(page.locator('.panel-sources')).toHaveAttribute('data-grid-width', '3');
+  const scope = page.getByRole('region', { name: 'Existing scope' });
+  await expect(scope).toHaveAttribute('data-grid-x', '3');
+  await expect(scope).toHaveAttribute('data-grid-y', '0');
+  await expect(scope.locator('.legend-item')).toHaveCount(1);
+});
+
+test('collapsed panels do not lock dragging or resizing and keep their expanded size', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?demo=1');
+  const sources = page.getByRole('region', { name: 'Programs & Channels', exact: true });
+  const scope = page.getByRole('region', { name: 'Scope 1', exact: true });
+  const width = (await page.locator('.scope-grid').boundingBox())!.width;
+  await sources.getByRole('button', { name: 'Collapse Programs & Channels', exact: true }).click();
+  await expect(sources.getByRole('button', { name: 'Move Programs & Channels', exact: true })).toBeEnabled();
+  await expect(scope.getByRole('button', { name: 'Move Scope 1' })).toBeEnabled();
+  await expect(scope.getByRole('button', { name: 'Resize Scope 1' })).toBeEnabled();
+  await dragBy(page, scope.getByRole('button', { name: 'Resize Scope 1' }), -width / 4, 84);
+  await expect(scope).toHaveAttribute('data-grid-width', '6');
+  await expect(scope).toHaveAttribute('data-grid-height', '9');
+  await dragBy(page, scope.getByRole('button', { name: 'Move Scope 1' }), width / 4, 0);
+  await expect(scope).toHaveAttribute('data-grid-x', '6');
+  // Use actual pointer events for the folded header, including an overlapping drop.
+  const handle = await sources.getByRole('button', { name: 'Move Programs & Channels', exact: true }).boundingBox();
+  await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + handle!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle!.x + handle!.width / 2 + width / 2, handle!.y + handle!.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect(sources).toHaveAttribute('data-grid-x', '6');
+  await expect(sources).toHaveAttribute('aria-expanded', 'false');
+  await expect(scope).toHaveAttribute('data-grid-y', '0.5');
+  await page.reload();
+  await expect(sources).toHaveAttribute('data-grid-x', '6');
+  await expect(scope).toHaveAttribute('data-grid-y', '0.5');
+  await sources.getByRole('button', { name: 'Expand Programs & Channels', exact: true }).click();
+  await expect(sources).toHaveAttribute('data-grid-height', '4');
+  await expect(scope).toHaveAttribute('data-grid-y', '4');
+  await expect(scope).toHaveAttribute('data-grid-height', '9');
+});
+
+test('drag follows the pointer continuously and settles onto a fine grid', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?demo=1');
+  const sources = page.getByRole('region', { name: 'Programs & Channels', exact: true });
+  const original = (await sources.boundingBox())!;
+  const handle = (await sources.getByRole('button', { name: 'Move Programs & Channels', exact: true }).boundingBox())!;
+  const startX = handle.x + handle.width / 2;
+  const startY = handle.y + handle.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX + 17, startY + 17);
+  await expect.poll(async () => Math.round((await sources.boundingBox())!.x - original.x)).toBe(17);
+  await expect.poll(async () => Math.round((await sources.boundingBox())!.y - original.y)).toBe(17);
+  await page.mouse.move(startX + 19, startY + 19);
+  await expect.poll(async () => Math.round((await sources.boundingBox())!.x - original.x)).toBe(19);
+  await page.mouse.up();
+  await expect.poll(async () => Math.round((await sources.boundingBox())!.x - original.x)).toBe(Math.round((await page.locator('.scope-grid').boundingBox())!.width / 48));
+  await expect.poll(async () => Math.round((await sources.boundingBox())!.y - original.y)).toBe(21);
+  const x = await sources.getAttribute('data-grid-x');
+  const y = await sources.getAttribute('data-grid-y');
+  await page.reload();
+  await expect(sources).toHaveAttribute('data-grid-x', x!);
+  await expect(sources).toHaveAttribute('data-grid-y', y!);
+  // Escape restores the layout, including when the final pointer event is still queued.
+  await sources.getByRole('button', { name: 'Move Programs & Channels', exact: true }).dispatchEvent('pointerdown', {
+    button: 0, clientX: 50, clientY: 50,
+  });
+  await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, clientY: 200 })));
+  await page.keyboard.press('Escape');
+  await expect(sources).toHaveAttribute('data-grid-x', x!);
+  await expect(sources).toHaveAttribute('data-grid-y', y!);
+});
+
+test('empty space follows every pointer step and only snaps to the grid on release', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1400 });
+  await page.goto('/?demo=1');
+  const sources = page.getByRole('region', { name: 'Programs & Channels', exact: true });
+  const before = (await sources.boundingBox())!;
+  const handle = (await sources.getByRole('button', { name: 'Move Programs & Channels', exact: true }).boundingBox())!;
+  const x = handle.x + handle.width / 2;
+  const y = handle.y + handle.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  // Below all neighbors, even movement close to the workspace's left edge is free.
+  for (const offset of [5, 9, 18, 26, 33, 19]) {
+    await page.mouse.move(x + offset, y + 800 + offset);
+    await expect.poll(async () => Math.round((await sources.boundingBox())!.x - before.x)).toBe(offset);
+    await expect.poll(async () => Math.round((await sources.boundingBox())!.y - before.y)).toBe(800 + offset);
+  }
+  await page.mouse.up();
+  await expect.poll(async () => Math.round((await sources.boundingBox())!.x - before.x)).toBe(Math.round((await page.locator('.scope-grid').boundingBox())!.width / 48));
+  await expect.poll(async () => Math.round((await sources.boundingBox())!.y - before.y)).toBe(819);
+});
+
+test('displaced neighbors leave no invisible edge magnets behind', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?demo=1');
+  const sources = page.getByRole('region', { name: 'Programs & Channels', exact: true });
+  const scope = page.getByRole('region', { name: 'Scope 1', exact: true });
+  const before = (await sources.boundingBox())!;
+  const handle = (await sources.getByRole('button', { name: 'Move Programs & Channels', exact: true }).boundingBox())!;
+  const x = handle.x + handle.width / 2;
+  const y = handle.y + handle.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 30, y);
+  await expect(scope).toHaveAttribute('data-grid-y', '4');
+  await page.waitForTimeout(200);
+  await page.mouse.move(x + 5, y);
+  await expect.poll(async () => Math.round((await sources.boundingBox())!.x - before.x)).toBe(5);
+  await expect(scope).toHaveAttribute('data-grid-y', '4');
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+});
+
+test('edge magnets hold small overlaps on release and let deliberate moves push neighbors', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?demo=1');
+  const sources = page.getByRole('region', { name: 'Programs & Channels', exact: true });
+  const scope = page.getByRole('region', { name: 'Scope 1', exact: true });
+  const originalX = await sources.getAttribute('data-grid-x');
+  const originalY = await scope.getAttribute('data-grid-y');
+  const handle = (await sources.getByRole('button', { name: 'Move Programs & Channels', exact: true }).boundingBox())!;
+  const x = handle.x + handle.width / 2;
+  const y = handle.y + handle.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 5, y);
+  await expect(sources).toHaveAttribute('data-grid-x', originalX!);
+  await page.mouse.move(x + 18, y);
+  await page.waitForTimeout(200);
+  await expect(sources).toHaveAttribute('data-grid-x', originalX!);
+  await expect(scope).toHaveAttribute('data-grid-y', originalY!);
+  await page.mouse.up();
+  await expect(sources).toHaveAttribute('data-grid-x', originalX!);
+  await expect(scope).toHaveAttribute('data-grid-y', originalY!);
+  await page.reload();
+  await expect(sources).toHaveAttribute('data-grid-x', originalX!);
+  await expect(scope).toHaveAttribute('data-grid-y', originalY!);
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 5, y);
+  await page.mouse.move(x + 24, y);
+  await expect(scope).toHaveAttribute('data-grid-y', '4');
+  await page.mouse.up();
+  await expect(scope).toHaveAttribute('data-grid-y', '4');
+});
+
+test('crossing panel edges does not repeatedly push neighbors during a drag', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?demo=1');
+  const sources = page.getByRole('region', { name: 'Programs & Channels', exact: true });
+  const scope = page.getByRole('region', { name: 'Scope 1', exact: true });
+  const before = (await scope.boundingBox())!;
+  const handle = (await sources.getByRole('button', { name: 'Move Programs & Channels', exact: true }).boundingBox())!;
+  const x = handle.x + handle.width / 2;
+  const y = handle.y + handle.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  for (const offset of [18, 0, 24, 0, 30]) {
+    await page.mouse.move(x + offset, y);
+    // Wait for the next rendered frame, then measure the geometry, not just state.
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const current = (await scope.boundingBox())!;
+    expect(Math.abs(current.y - before.y)).toBeLessThan(1);
+    expect(Math.abs(current.height - before.height)).toBeLessThan(1);
+    expect(await scope.evaluate((element) => element.getAnimations().length)).toBe(0);
+  }
+  // Steady pointer motion within the same collision must not postpone preview forever.
+  for (const offset of [31, 32, 33, 34, 35, 36]) {
+    await page.mouse.move(x + offset, y);
+    await page.waitForTimeout(30);
+  }
+  await expect(scope).toHaveAttribute('data-grid-y', '4');
+  await expect(page.locator('body')).toHaveAttribute('data-layout-interaction', 'move');
+  await expect.poll(async () => (await scope.boundingBox())!.y).toBeGreaterThan(before.y + 300);
+  await page.mouse.move(x, y);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  await expect(scope).toHaveAttribute('data-grid-y', '4');
+  await page.mouse.move(x + 30, y);
+  await expect(scope).toHaveAttribute('data-grid-y', '4');
+  await page.mouse.up();
+  await expect(scope).toHaveAttribute('data-grid-y', '4');
+  await page.reload();
+  await expect(scope).toHaveAttribute('data-grid-y', '4');
+  await sources.getByRole('button', { name: 'Move Programs & Channels', exact: true }).dispatchEvent('pointerdown', {
+    button: 0, clientX: 50, clientY: 50,
+  });
+  await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointermove', { clientX: 80, clientY: 200 })));
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  await expect(scope).toHaveAttribute('data-grid-y', '4');
+  await expect(page.locator('body')).not.toHaveAttribute('data-layout-interaction');
+});
+
+for (const overshoot of [-6, 6]) {
+  test(`resize aligns with the panel above and beside it from ${overshoot}px off the edge`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.addInitScript(() => {
+      localStorage.setItem('debugscope.scope-layouts.v1', JSON.stringify({
+        __debugscope_workspace_template__: [
+          { id: 'sources', type: 'sources', title: 'Programs & Channels', channelKeys: [], layout: { x: 0, y: 0, width: 3, height: 4 } },
+          { id: 'above', type: 'indicators', title: 'Above', channelKeys: [], layout: { x: 3, y: 0, width: 8.13, height: 2 } },
+          { id: 'beside', type: 'indicators', title: 'Beside', channelKeys: [], layout: { x: 3, y: 2, width: 4, height: 1.27 } },
+          { id: 'resized', type: 'indicators', title: 'Resized', channelKeys: [], layout: { x: 7, y: 2, width: 3, height: 1 } },
+        ],
+      }));
+    });
+    await page.goto('/');
+    const panel = page.getByRole('region', { name: 'Resized', exact: true });
+    const above = page.getByRole('region', { name: 'Above', exact: true });
+    const beside = page.getByRole('region', { name: 'Beside', exact: true });
+    const rect = (await panel.boundingBox())!;
+    const top = (await above.boundingBox())!;
+    const left = (await beside.boundingBox())!;
+    await dragBy(page, panel.getByRole('button', { name: 'Resize Resized', exact: true }),
+      top.x + top.width - rect.x - rect.width + overshoot,
+      left.y + left.height - rect.y - rect.height + overshoot);
+    await expect.poll(async () => {
+      const current = (await panel.boundingBox())!;
+      return Math.abs(current.x + current.width - top.x - top.width);
+    }).toBeLessThan(1);
+    await expect.poll(async () => {
+      const current = (await panel.boundingBox())!;
+      return Math.abs(current.y + current.height - left.y - left.height);
+    }).toBeLessThan(1);
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('debugscope.scope-layouts.v1')!));
+    const layout = stored.__debugscope_workspace_template__.find((item: { id: string }) => item.id === 'resized').layout;
+    expect(layout.x + layout.width).toBeCloseTo(11.25);
+    expect(layout.y + layout.height).toBeCloseTo(3.25);
+  });
+}
+
+for (const viewportWidth of [1100, 1700]) {
+  test(`move and resize settle on shared grid lines at width ${viewportWidth}`, async ({ page }) => {
+    await page.setViewportSize({ width: viewportWidth, height: 900 });
+    await page.goto('/?demo=1');
+    const sources = page.getByRole('region', { name: 'Programs & Channels', exact: true });
+    const before = (await sources.boundingBox())!;
+    await dragBy(page, sources.getByRole('button', { name: 'Move Programs & Channels', exact: true }), 19, 19);
+    await expect.poll(async () => Math.round((await sources.boundingBox())!.x - before.x)).toBe(Math.round((await page.locator('.scope-grid').boundingBox())!.width / 48));
+    await expect.poll(async () => Math.round((await sources.boundingBox())!.y - before.y)).toBe(21);
+    const moved = (await sources.boundingBox())!;
+    await dragBy(page, sources.getByRole('button', { name: 'Resize Programs & Channels', exact: true }), 19, 19);
+    await expect.poll(async () => Math.round((await sources.boundingBox())!.width - moved.width)).toBe(Math.round((await page.locator('.scope-grid').boundingBox())!.width / 48));
+    await expect.poll(async () => Math.round((await sources.boundingBox())!.height - moved.height)).toBe(21);
+    await page.reload();
+    await expect.poll(async () => Math.round((await sources.boundingBox())!.width - moved.width)).toBe(Math.round((await page.locator('.scope-grid').boundingBox())!.width / 48));
+    await expect.poll(async () => Math.round((await sources.boundingBox())!.height - moved.height)).toBe(21);
+  });
+}

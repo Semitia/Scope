@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   Activity,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   ChevronUp,
   Download,
@@ -29,7 +28,9 @@ import {
 } from 'lucide-react';
 import { WaveformPlot } from './components/WaveformPlot';
 import { IndicatorPanel } from './components/IndicatorPanel';
+import { ChannelGroupTree } from './components/ChannelGroupTree';
 import { ValueBarPanel } from './components/ValueBarPanel';
+import { createDragDiagnostics } from './dragDiagnostics';
 import { useTelemetry } from './hooks/useTelemetry';
 import {
   DEFAULT_STATE_COLORS,
@@ -62,20 +63,22 @@ const THEME_KEY = 'debugscope.theme.v1';
 const SETTINGS_KEY = 'debugscope.settings.v1';
 const COLLAPSED_CHANNEL_GROUPS_KEY = 'debugscope.collapsed-channel-groups.v1';
 const COLLAPSED_PANELS_KEY = 'debugscope.collapsed-panels.v1';
-const MAX_PANELS = 8;
+const MAX_PANELS = 9;
 const WORKSPACE_TEMPLATE_KEY = '__debugscope_workspace_template__';
 const GRID_COLUMNS = 12;
 const GRID_ROW_HEIGHT = 84;
+const LAYOUT_GRID_STEP = 0.25;
+const EDGE_SNAP_PX = 10;
+const EDGE_RELEASE_PX = 20;
+const snapLayoutValue = (value: number, step: number) => Math.round(value / step) * step;
 const PANEL_REFLOW_DURATION_MS = 260;
+const LAYOUT_PREVIEW_DEBOUNCE_MS = 120;
 const MIN_PANEL_WIDTH = 3;
 const MIN_PANEL_HEIGHT = 2;
 const MIN_INDICATOR_PANEL_WIDTH = 2;
 const MIN_INDICATOR_PANEL_HEIGHT = 1;
 const MIN_WINDOW_SECONDS = 0.1;
 const MAX_WINDOW_SECONDS = 3_600;
-const DEFAULT_SIDEBAR_WIDTH = 252;
-const MIN_SIDEBAR_WIDTH = 220;
-const MAX_SIDEBAR_WIDTH = 480;
 const WORKSPACE_CONFIG_SCHEMA = 'debugscope.workspace';
 const WORKSPACE_CONFIG_VERSION = 1;
 const MAX_WORKSPACE_FILE_BYTES = 1024 * 1024;
@@ -83,9 +86,9 @@ const MAX_WORKSPACE_FILE_BYTES = 1024 * 1024;
 interface UserSettings {
   scrollWhenIdle: boolean;
   fontScale: number;
-  sidebarWidth: number;
   visualStyle: 'compact' | 'cards';
-  sidebarCollapsed: boolean;
+  programsCollapsed: boolean;
+  channelsCollapsed: boolean;
 }
 
 type ScopeLayouts = Record<string, PanelDefinition[]>;
@@ -97,13 +100,9 @@ interface LayoutInteraction {
   startY: number;
   origin: PanelGridLayout;
   panels: PanelDefinition[];
+  expandedPanels: PanelDefinition[];
   workspaceWidth: number;
-}
-
-interface SidebarResizeInteraction {
-  pointerId: number;
-  startX: number;
-  startWidth: number;
+  workspaceHeight: number;
 }
 
 interface WorkspaceConfigFile {
@@ -404,10 +403,6 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function channelGroup(channel: ChannelDefinition): string {
-  const segments = channel.key.split('.');
-  return segments.length > 1 ? segments.slice(0, -1).join('.') : 'signals';
-}
 
 function initialTheme(): ThemeMode {
   const stored = localStorage.getItem(THEME_KEY);
@@ -429,14 +424,13 @@ function initialSettings(): UserSettings {
     const fontScale = typeof stored.fontScale === 'number' && Number.isFinite(stored.fontScale)
       ? Math.min(1.4, Math.max(0.8, stored.fontScale))
       : 1;
-    const sidebarWidth = typeof stored.sidebarWidth === 'number' && Number.isFinite(stored.sidebarWidth)
-      ? Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, stored.sidebarWidth))
-      : DEFAULT_SIDEBAR_WIDTH;
-    return { scrollWhenIdle: stored.scrollWhenIdle === true, fontScale, sidebarWidth,
+    return { scrollWhenIdle: stored.scrollWhenIdle === true, fontScale,
       visualStyle: stored.visualStyle === 'cards' ? 'cards' : 'compact',
-      sidebarCollapsed: stored.sidebarCollapsed === true };
+      programsCollapsed: stored.programsCollapsed === true,
+      channelsCollapsed: stored.channelsCollapsed === true };
   } catch {
-    return { scrollWhenIdle: false, fontScale: 1, sidebarWidth: DEFAULT_SIDEBAR_WIDTH, visualStyle: 'compact', sidebarCollapsed: false };
+    return { scrollWhenIdle: false, fontScale: 1,
+      visualStyle: 'compact', programsCollapsed: false, channelsCollapsed: false };
   }
 }
 
@@ -474,9 +468,21 @@ function defaultPanelLayout(index: number, single = false): PanelGridLayout {
 }
 
 function panelMinimumSize(type: PanelType): { width: number; height: number } {
+  if (type === 'value-bar' || type === 'sources') return { width: 2, height: MIN_PANEL_HEIGHT };
   return type === 'indicators'
     ? { width: MIN_INDICATOR_PANEL_WIDTH, height: MIN_INDICATOR_PANEL_HEIGHT }
     : { width: MIN_PANEL_WIDTH, height: MIN_PANEL_HEIGHT };
+}
+
+// All persisted edges share the workspace origin, including imported layouts.
+// Quarter columns remain aligned when the workspace changes width.
+function alignPanelEdges(layout: PanelGridLayout, minimum: { width: number; height: number }): PanelGridLayout {
+  const snap = (value: number) => snapLayoutValue(value, LAYOUT_GRID_STEP);
+  const x = Math.max(0, Math.min(GRID_COLUMNS - minimum.width, snap(layout.x)));
+  const y = Math.max(0, snap(layout.y));
+  const right = Math.min(GRID_COLUMNS, Math.max(x + minimum.width, snap(layout.x + layout.width)));
+  const bottom = Math.max(y + minimum.height, snap(layout.y + layout.height));
+  return { x, y, width: right - x, height: bottom - y };
 }
 
 function normalizePanelLayout(
@@ -489,17 +495,17 @@ function normalizePanelLayout(
   const minimum = panelMinimumSize(type);
   const number = (key: string, defaultValue: number) => (
     typeof candidate[key] === 'number' && Number.isFinite(candidate[key])
-      ? Math.round(candidate[key])
+      ? candidate[key]
       : defaultValue
   );
   const width = Math.max(minimum.width, Math.min(GRID_COLUMNS, number('width', fallback.width)));
   const x = Math.max(0, Math.min(GRID_COLUMNS - width, number('x', fallback.x)));
-  return {
+  return alignPanelEdges({
     x,
     y: Math.max(0, number('y', fallback.y)),
     width,
     height: Math.max(minimum.height, number('height', fallback.height)),
-  };
+  }, minimum);
 }
 
 function isWorkspacePanelLayout(value: unknown, type: PanelType): value is PanelGridLayout {
@@ -508,7 +514,6 @@ function isWorkspacePanelLayout(value: unknown, type: PanelType): value is Panel
   if (!['x', 'y', 'width', 'height'].every((key) => (
     typeof layout[key] === 'number'
     && Number.isFinite(layout[key])
-    && Number.isInteger(layout[key])
   ))) return false;
   const { x, y, width, height } = layout as unknown as PanelGridLayout;
   const minimum = panelMinimumSize(type);
@@ -516,17 +521,33 @@ function isWorkspacePanelLayout(value: unknown, type: PanelType): value is Panel
     && y >= 0
     && width >= minimum.width
     && width <= GRID_COLUMNS
-    && x + width <= GRID_COLUMNS
+    && x + width <= GRID_COLUMNS + 1e-7
     && height >= minimum.height
     && y <= 100_000
     && height <= 10_000;
 }
 
 function layoutsOverlap(left: PanelGridLayout, right: PanelGridLayout): boolean {
-  return left.x < right.x + right.width
-    && left.x + left.width > right.x
-    && left.y < right.y + right.height
-    && left.y + left.height > right.y;
+  return left.x < right.x + right.width - 1e-7
+    && left.x + left.width > right.x + 1e-7
+    && left.y < right.y + right.height - 1e-7
+    && left.y + left.height > right.y + 1e-7;
+}
+
+function alignPanelCollection(panels: PanelDefinition[]): PanelDefinition[] {
+  const placed: PanelGridLayout[] = [];
+  const layouts = new Map<string, PanelGridLayout>();
+  for (const panel of [...panels].sort((a, b) => a.layout.y - b.layout.y || a.layout.x - b.layout.x)) {
+    const layout = alignPanelEdges(panel.layout, panelMinimumSize(panel.type));
+    let blockers = placed.filter((other) => layoutsOverlap(layout, other));
+    while (blockers.length) {
+      layout.y = Math.max(...blockers.map((other) => other.y + other.height));
+      blockers = placed.filter((other) => layoutsOverlap(layout, other));
+    }
+    placed.push(layout);
+    layouts.set(panel.id, layout);
+  }
+  return panels.map((panel) => ({ ...panel, layout: layouts.get(panel.id)! }));
 }
 
 function placePanelWithoutOverlap(
@@ -556,6 +577,71 @@ function placePanelWithoutOverlap(
   return panels.map((panel) => ({ ...panel, layout: layouts.get(panel.id) ?? panel.layout }));
 }
 
+function withSourcesPanel(panels: PanelDefinition[]): PanelDefinition[] {
+  const sources = panels.find((panel) => panel.type === 'sources');
+  // Migrate the previous full-width default, while retaining customized layouts.
+  const previousDefault = sources?.id === 'sources-default'
+    && sources.layout.x === 0 && sources.layout.y === 0
+    && sources.layout.width === GRID_COLUMNS && sources.layout.height === 4
+    && panels.every((panel) => panel === sources || panel.layout.y >= 4);
+  if (sources && !previousDefault) return panels;
+
+  const result: PanelDefinition[] = [{
+    id: sources?.id ?? 'sources-default', type: 'sources',
+    title: sources?.title ?? 'Programs & Channels', channelKeys: [],
+    layout: { x: 0, y: 0, width: 3, height: 4 },
+  }];
+  for (const panel of panels.filter((item) => item.type !== 'sources')) {
+    const width = Math.max(panelMinimumSize(panel.type).width, Math.round(panel.layout.width * 0.75));
+    const layout = {
+      ...panel.layout,
+      x: Math.min(GRID_COLUMNS - width, 3 + Math.round(panel.layout.x * 0.75)),
+      y: panel.layout.y - (previousDefault ? 4 : 0),
+      width,
+    };
+    while (result.some((item) => layoutsOverlap(item.layout, layout))) {
+      layout.y = Math.max(...result.filter((item) => layoutsOverlap(item.layout, layout))
+        .map((item) => item.layout.y + item.layout.height));
+    }
+    result.push({ ...panel, layout });
+  }
+  return result;
+}
+
+// Store expanded sizes, but derive their positions from the visible drag result.
+// This keeps collapsed headers small during dragging and restores their content on expansion.
+function restoreExpandedLayouts(
+  visiblePanels: PanelDefinition[],
+  expandedPanels: PanelDefinition[],
+  collapsedIds: ReadonlySet<string>,
+): PanelDefinition[] {
+  const placed: { visible: PanelGridLayout; expanded: PanelGridLayout }[] = [];
+  const layouts = new Map<string, PanelGridLayout>();
+  const ordered = [...visiblePanels].sort((a, b) => a.layout.y - b.layout.y || a.layout.x - b.layout.x);
+  for (const panel of ordered) {
+    const visible = panel.layout;
+    const expanded = {
+      ...visible,
+      height: collapsedIds.has(panel.id)
+        ? expandedPanels.find((item) => item.id === panel.id)!.layout.height
+        : visible.height,
+    };
+    for (const previous of placed) {
+      if (visible.x < previous.visible.x + previous.visible.width
+        && visible.x + visible.width > previous.visible.x
+        && previous.visible.y + previous.visible.height <= visible.y + 0.000001) {
+        expanded.y = Math.max(expanded.y, previous.expanded.y + previous.expanded.height
+          + visible.y - previous.visible.y - previous.visible.height);
+      }
+    }
+
+    if (Math.abs(expanded.y - Math.round(expanded.y)) < 1e-7) expanded.y = Math.round(expanded.y);
+    layouts.set(panel.id, expanded);
+    placed.push({ visible, expanded });
+  }
+  return visiblePanels.map((panel) => ({ ...panel, layout: layouts.get(panel.id)! }));
+}
+
 function compactCollapsedPanels(
   panels: PanelDefinition[],
   collapsedPanelIds: ReadonlySet<string>,
@@ -572,13 +658,14 @@ function compactCollapsedPanels(
   for (const panel of ordered) {
     const next = {
       ...panel.layout,
-      height: collapsedPanelIds.has(panel.id) ? (28 + gap) / GRID_ROW_HEIGHT : panel.layout.height,
+      height: collapsedPanelIds.has(panel.id)
+        ? Math.ceil((28 + gap) / GRID_ROW_HEIGHT / LAYOUT_GRID_STEP) * LAYOUT_GRID_STEP
+        : panel.layout.height,
     };
-    while (next.y > 0) {
-      const candidate = { ...next, y: (Math.round(next.y * GRID_ROW_HEIGHT) - 1) / GRID_ROW_HEIGHT };
-      if (placed.some((layout) => layoutsOverlap(candidate, layout))) break;
-      next.y = candidate.y;
-    }
+    next.y = placed.reduce((bottom, layout) => (
+      next.x < layout.x + layout.width - 1e-7 && next.x + next.width > layout.x + 1e-7
+        ? Math.max(bottom, layout.y + layout.height) : bottom
+    ), 0);
     layouts.set(panel.id, next);
     placed.push(next);
   }
@@ -611,7 +698,8 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
     const panel = rawPanel as Record<string, unknown>;
     const validType = panel.type === 'scope'
       || panel.type === 'value-bar'
-      || panel.type === 'indicators';
+      || panel.type === 'indicators'
+      || panel.type === 'sources';
     const validIdentity = typeof panel.id === 'string'
       && panel.id.length > 0
       && typeof panel.title === 'string'
@@ -646,6 +734,14 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
         panel.type as PanelType,
       ),
     };
+    if (panel.type === 'sources') {
+      if (panels.some((item) => item.type === 'sources')) {
+        if (strict) fail('A workspace can contain only one sources panel.');
+        continue;
+      }
+      panels.push({ ...base, type: 'sources' });
+      continue;
+    }
     if (panel.type === 'value-bar') {
       const validRange = (panel.rangeMode === 'auto' || panel.rangeMode === 'manual')
         && typeof panel.manualMin === 'number'
@@ -767,7 +863,7 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
       windowSeconds: storedWindowSeconds,
     });
   }
-  return panels;
+  return alignPanelCollection(panels);
 }
 
 function initialScopeLayouts(): ScopeLayouts {
@@ -830,7 +926,7 @@ function effectivePanelChannelKeys(
   panel: PanelDefinition | undefined,
   channels: ChannelDefinition[],
 ): string[] {
-  if (!panel || panel.type === 'scope' || !panel.channelGroup) return panel?.channelKeys ?? [];
+  if (!panel || panel.type === 'scope' || panel.type === 'sources' || !panel.channelGroup) return panel?.channelKeys ?? [];
   const prefix = `${panel.channelGroup}.`;
   return channels
     .filter((channel) => {
@@ -873,18 +969,6 @@ export default function App() {
   const [selectedChannel, setSelectedChannel] = useState('');
   const [pausedAt, setPausedAt] = useState<number | null>(null);
   const [channelSearch, setChannelSearch] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [narrowLayout, setNarrowLayout] = useState(() => window.matchMedia('(max-width: 920px)').matches);
-  useEffect(() => {
-    const query = window.matchMedia('(max-width: 920px)');
-    const update = () => setNarrowLayout(query.matches);
-    query.addEventListener('change', update);
-    return () => query.removeEventListener('change', update);
-  }, []);
-  const sidebarVisible = narrowLayout ? sidebarOpen : !settings.sidebarCollapsed;
-  const sidebarToggleLabel = narrowLayout
-    ? (sidebarVisible ? 'Close channels' : 'Open channels')
-    : (sidebarVisible ? 'Collapse sidebar' : 'Expand sidebar');
   const [hubEditorOpen, setHubEditorOpen] = useState(false);
   const [hubAddress, setHubAddress] = useState('');
   const [hubAddressError, setHubAddressError] = useState('');
@@ -892,10 +976,10 @@ export default function App() {
   const [renderRates, setRenderRates] = useState<Record<string, number>>({});
   const gridRef = useRef<HTMLDivElement>(null);
   const layoutPreviewRef = useRef<PanelDefinition[] | null>(null);
+  const dragDiagnosticsRef = useRef<ReturnType<typeof createDragDiagnostics>>(null);
   const panelRectsBeforeReflowRef = useRef<Map<string, DOMRect> | null>(null);
   const panelReflowAnimationsRef = useRef<Map<string, Animation>>(new Map());
   const workspaceFileRef = useRef<HTMLInputElement>(null);
-  const sidebarResizeRef = useRef<SidebarResizeInteraction | null>(null);
 
   const sourceKeys = useMemo(
     () => new Map(telemetry.sources.map((source) => [source.id, source.programKey])),
@@ -925,10 +1009,10 @@ export default function App() {
   }), [channelIdentity, layoutKey]);
   const scopePanels = useMemo(() => {
     const stored = scopeLayouts[layoutKey];
-    if (stored?.length) return stored;
+    if (stored?.length) return withSourcesPanel(stored);
     const template = activeSource ? scopeLayouts[WORKSPACE_TEMPLATE_KEY] : undefined;
     if (template?.length) {
-      return template.map((panel) => (
+      return withSourcesPanel(template.map((panel) => (
         panel.type === 'scope'
         && panel.id === `scope-default:${WORKSPACE_TEMPLATE_KEY}`
         && panel.channelKeys.length === 0
@@ -938,9 +1022,9 @@ export default function App() {
             channelKeys: channels.slice(0, 4).map((channel) => channel.key),
           }
           : panel
-      ));
+      )));
     }
-    return [defaultScope];
+    return withSourcesPanel([defaultScope]);
   }, [defaultScope, layoutKey, scopeLayouts]);
   const collapsedPanelIds = useMemo(() => new Set(
     (collapsedPanels[layoutKey] ?? []).filter((panelId) => (
@@ -948,11 +1032,21 @@ export default function App() {
     )),
   ), [collapsedPanels, layoutKey, scopePanels]);
   const gridGap = settings.visualStyle === 'cards' ? 12 : 0;
-  const displayedPanels = useMemo(() => compactCollapsedPanels(
-    layoutPreview ?? scopePanels,
+  const displayedPanels = useMemo(() => layoutPreview ?? compactCollapsedPanels(
+    scopePanels,
     collapsedPanelIds,
     gridGap,
   ), [collapsedPanelIds, layoutPreview, scopePanels, gridGap]);
+  useLayoutEffect(() => {
+    const diagnostics = dragDiagnosticsRef.current;
+    if (!diagnostics || !layoutPreview) return;
+    const element = gridRef.current?.querySelector<HTMLElement>('.layout-move, .layout-resize');
+    if (!element) return;
+    const rect = element.getBoundingClientRect();
+    diagnostics.rendered({ actualRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      gridX: element.dataset.gridX, gridY: element.dataset.gridY,
+      scrollX: window.scrollX, scrollY: window.scrollY });
+  }, [layoutPreview]);
   const capturePanelRectsBeforeReflow = useCallback(() => {
     const grid = gridRef.current;
     if (!grid) return;
@@ -978,24 +1072,27 @@ export default function App() {
     grid.querySelectorAll<HTMLElement>('.scope-panel[data-panel-id]').forEach((element) => {
       const panelId = element.dataset.panelId;
       const previous = panelId ? previousRects.get(panelId) : undefined;
-      if (!panelId || !previous) return;
+      if (!panelId || !previous || layoutInteraction?.panelId === panelId) return;
       const next = element.getBoundingClientRect();
       const deltaX = previous.left - next.left;
       const deltaY = previous.top - next.top;
+      const widthChanged = Math.abs(previous.width - next.width) > 0.5;
       const heightChanged = Math.abs(previous.height - next.height) > 0.5;
-      if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5 && !heightChanged) return;
+      if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5 && !heightChanged && !widthChanged) return;
 
       const animation = element.animate([
         {
-          height: `${previous.height}px`,
+          ...(widthChanged ? { width: `${previous.width}px` } : {}),
+          ...(heightChanged ? { height: `${previous.height}px` } : {}),
           transform: `translate(${deltaX}px, ${deltaY}px)`,
         },
         {
-          height: `${next.height}px`,
+          ...(widthChanged ? { width: `${next.width}px` } : {}),
+          ...(heightChanged ? { height: `${next.height}px` } : {}),
           transform: 'translate(0, 0)',
         },
       ], {
-        duration: PANEL_REFLOW_DURATION_MS,
+        duration: layoutInteraction ? 160 : PANEL_REFLOW_DURATION_MS,
         easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
       });
       panelReflowAnimationsRef.current.set(panelId, animation);
@@ -1005,8 +1102,8 @@ export default function App() {
         }
       };
     });
-  }, [displayedPanels]);
-  const activeScope = scopePanels.find((panel) => panel.id === activeScopeId) ?? scopePanels[0];
+  }, [displayedPanels, layoutInteraction]);
+  const activeScope = scopePanels.find((panel) => panel.id === activeScopeId && panel.type !== 'sources') ?? scopePanels.find((panel) => panel.type !== 'sources');
   const activeScopeChannelIds = useMemo(() => {
     const keys = new Set(effectivePanelChannelKeys(activeScope, channels));
     return new Set(channels.filter((channel) => keys.has(channel.key)).map((channel) => channel.id));
@@ -1143,7 +1240,7 @@ export default function App() {
   }, [channelIdentity, telemetry.activeSourceId]);
 
   useEffect(() => {
-    const nextActiveScope = scopePanels.find((panel) => panel.id === activeScopeId) ?? scopePanels[0];
+    const nextActiveScope = scopePanels.find((panel) => panel.id === activeScopeId && panel.type !== 'sources') ?? scopePanels.find((panel) => panel.type !== 'sources');
     if (nextActiveScope && nextActiveScope.id !== activeScopeId) {
       setActiveScopeId(nextActiveScope.id);
     }
@@ -1211,17 +1308,6 @@ export default function App() {
     );
   }, [channelSearch, channels]);
 
-  const groupedChannels = useMemo(() => {
-    const groups = new Map<string, ChannelDefinition[]>();
-    for (const channel of filteredChannels) {
-      const group = channelGroup(channel);
-      const existing = groups.get(group) ?? [];
-      existing.push(channel);
-      groups.set(group, existing);
-    }
-    return [...groups.entries()];
-  }, [filteredChannels]);
-
   const collapsedGroupsForSource = useMemo(
     () => new Set(collapsedChannelGroups[layoutKey] ?? []),
     [collapsedChannelGroups, layoutKey],
@@ -1245,8 +1331,8 @@ export default function App() {
     updater: (panels: PanelDefinition[]) => PanelDefinition[],
   ) => {
     setScopeLayouts((current) => {
-      const base = current[layoutKey]?.length ? current[layoutKey] : scopePanels;
-      return { ...current, [layoutKey]: updater(base) };
+      const base = current[layoutKey]?.length ? withSourcesPanel(current[layoutKey]) : scopePanels;
+      return { ...current, [layoutKey]: alignPanelCollection(updater(base)) };
     });
   }, [layoutKey, scopePanels]);
 
@@ -1255,45 +1341,130 @@ export default function App() {
     panel: PanelDefinition,
     kind: LayoutInteraction['kind'],
   ) => {
-    if (window.innerWidth <= 920 || event.button !== 0 || collapsedPanelIds.size > 0) return;
+    if (window.innerWidth <= 920 || event.button !== 0) return;
     const grid = gridRef.current;
     if (!grid) return;
     event.preventDefault();
     event.stopPropagation();
-    setActiveScopeId(panel.id);
+    panelReflowAnimationsRef.current.forEach((animation) => animation.cancel());
+    panelReflowAnimationsRef.current.clear();
+    if (panel.type !== 'sources') setActiveScopeId(panel.id);
     setChannelPickerScopeId(null);
-    layoutPreviewRef.current = scopePanels;
-    setLayoutPreview(scopePanels);
+    layoutPreviewRef.current = null;
+    setLayoutPreview(displayedPanels);
     setLayoutInteraction({
       kind,
       panelId: panel.id,
       startX: event.clientX,
       startY: event.clientY,
       origin: { ...panel.layout },
-      panels: scopePanels,
+      panels: displayedPanels,
+      expandedPanels: scopePanels,
       workspaceWidth: grid.getBoundingClientRect().width,
+      workspaceHeight: grid.getBoundingClientRect().height,
     });
-  }, [collapsedPanelIds.size, scopePanels]);
+  }, [displayedPanels, scopePanels]);
 
   useEffect(() => {
     if (!layoutInteraction) return;
     document.body.classList.add('layout-interacting');
     document.body.dataset.layoutInteraction = layoutInteraction.kind;
+    const diagnostics = createDragDiagnostics({ kind: layoutInteraction.kind,
+      panelId: layoutInteraction.panelId, origin: layoutInteraction.origin,
+      startPointer: { x: layoutInteraction.startX, y: layoutInteraction.startY },
+      workspaceWidth: layoutInteraction.workspaceWidth, workspaceHeight: layoutInteraction.workspaceHeight,
+      panels: layoutInteraction.panels.map(({ id, layout }) => ({ id, layout })),
+      devicePixelRatio: window.devicePixelRatio });
+    dragDiagnosticsRef.current = diagnostics;
 
-    const move = (event: PointerEvent) => {
-      const columnWidth = (
-        layoutInteraction.workspaceWidth - gridGap * (GRID_COLUMNS - 1)
-      ) / GRID_COLUMNS;
-      const columnStep = Math.max(1, columnWidth + gridGap);
-      const rowStep = GRID_ROW_HEIGHT;
-      const deltaColumns = Math.round((event.clientX - layoutInteraction.startX) / columnStep);
-      const deltaRows = Math.round((event.clientY - layoutInteraction.startY) / rowStep);
+    let frame: number | null = null;
+    let latestPointer: { clientX: number; clientY: number } | null = null;
+    let previewTimer: ReturnType<typeof setTimeout> | null = null;
+    let acceptedPanels = layoutInteraction.panels;
+    let pendingPanels = acceptedPanels;
+    let pendingTopology = '';
+    let movingLayout = layoutInteraction.origin;
+    const edgeLocks: { x: number | null; y: number | null } = { x: null, y: null };
+    const snapPanelEdges = (layout: PanelGridLayout) => {
+      const columnStep = layoutInteraction.workspaceWidth / GRID_COLUMNS;
+      const resizing = layoutInteraction.kind === 'resize';
+      const minimum = panelMinimumSize(layoutInteraction.panels.find((panel) => panel.id === layoutInteraction.panelId)!.type);
+      const targets: { x: number[]; y: number[] } = { x: [], y: [] };
+      for (const panel of acceptedPanels) {
+        if (panel.id === layoutInteraction.panelId) continue;
+        const other = panel.layout;
+        const original = layoutInteraction.panels.find((item) => item.id === panel.id)!.layout;
+        // Pushed neighbors follow the moving panel, so they cannot act as stable
+        // anchors. Neither their old edges nor empty workspace boundaries attract.
+        if (Math.abs(other.x - original.x) > 1e-7 || Math.abs(other.y - original.y) > 1e-7) continue;
+        if (resizing) {
+          // Include adjacent rows/columns so a lower panel can match the right
+          // edge above it, or match the bottom edge of the panel beside it.
+          const nearY = layout.y <= other.y + other.height + EDGE_RELEASE_PX / GRID_ROW_HEIGHT
+            && layout.y + layout.height >= other.y - EDGE_RELEASE_PX / GRID_ROW_HEIGHT;
+          const nearX = layout.x <= other.x + other.width + EDGE_RELEASE_PX / columnStep
+            && layout.x + layout.width >= other.x - EDGE_RELEASE_PX / columnStep;
+          if (nearY) targets.x.push(other.x - layout.x, other.x + other.width - layout.x);
+          if (nearX) targets.y.push(other.y - layout.y, other.y + other.height - layout.y);
+          continue;
+        }
+        if (layout.y < other.y + other.height && layout.y + layout.height > other.y) {
+          targets.x.push(other.x - layout.width, other.x + other.width);
+        }
+        if (layout.x < other.x + other.width && layout.x + layout.width > other.x) {
+          targets.y.push(other.y - layout.height, other.y + other.height);
+        }
+      }
+      const result = { ...layout };
+      for (const axis of ['x', 'y'] as const) {
+        const scale = axis === 'x' ? columnStep : GRID_ROW_HEIGHT;
+        const property = resizing ? (axis === 'x' ? 'width' : 'height') : axis;
+        const min = resizing ? (axis === 'x' ? minimum.width : minimum.height) : 0;
+        const max = resizing ? GRID_COLUMNS - layout.x : GRID_COLUMNS - layout.width;
+        const candidates = targets[axis].filter((value) => value >= min
+          && (axis !== 'x' || value <= max));
+        const locked = edgeLocks[axis];
+        if (locked !== null && candidates.includes(locked)
+          && Math.abs(layout[property] - locked) * scale <= EDGE_RELEASE_PX) {
+          result[property] = locked;
+          continue;
+        }
+        edgeLocks[axis] = null;
+        const nearest = candidates.sort((a, b) => Math.abs(a - layout[property]) - Math.abs(b - layout[property]))[0];
+        if (nearest !== undefined && Math.abs(layout[property] - nearest) * scale <= EDGE_SNAP_PX) {
+          edgeLocks[axis] = nearest;
+          result[property] = nearest;
+        }
+      }
+      return result;
+    };
+    const publishPreview = () => {
+      const preview = acceptedPanels.map((panel) => panel.id === layoutInteraction.panelId
+        ? { ...panel, layout: movingLayout } : panel);
+      layoutPreviewRef.current = preview;
+      diagnostics?.preview({ layout: { ...movingLayout }, edgeLocks: { ...edgeLocks },
+        neighbors: acceptedPanels.filter((panel) => panel.id !== layoutInteraction.panelId)
+          .map(({ id, layout }) => ({ id, layout })) });
+      setLayoutPreview(preview);
+    };
+    const clearPreviewTimer = () => {
+      if (previewTimer !== null) clearTimeout(previewTimer);
+      previewTimer = null;
+    };
+    const previewAt = (event: { clientX: number; clientY: number }, snap: boolean) => {
+      const calculationStart = diagnostics ? performance.now() : 0;
+      const previousLocks = diagnostics ? { ...edgeLocks } : null;
+      const columnStep = layoutInteraction.workspaceWidth / GRID_COLUMNS;
+      const offsetX = event.clientX - layoutInteraction.startX;
+      const offsetY = event.clientY - layoutInteraction.startY;
+      const deltaColumns = offsetX / columnStep;
+      const deltaRows = offsetY / GRID_ROW_HEIGHT;
       const origin = layoutInteraction.origin;
       const resizedPanel = layoutInteraction.panels.find((panel) => (
         panel.id === layoutInteraction.panelId
       ));
       const minimum = panelMinimumSize(resizedPanel?.type ?? 'scope');
-      const next = layoutInteraction.kind === 'move'
+      let next = layoutInteraction.kind === 'move'
         ? {
           ...origin,
           x: Math.max(0, Math.min(GRID_COLUMNS - origin.width, origin.x + deltaColumns)),
@@ -1307,39 +1478,114 @@ export default function App() {
           ),
           height: Math.max(minimum.height, origin.height + deltaRows),
         };
-      const preview = placePanelWithoutOverlap(
-        layoutInteraction.panels,
-        layoutInteraction.panelId,
-        next,
-      );
-      layoutPreviewRef.current = preview;
-      setLayoutPreview(preview);
+      if (layoutInteraction.kind === 'move') {
+        // Resolve magnets from the pointer before rounding: releasing the mouse
+        // must not turn a safe edge placement into a collision.
+        const edgeLayout = snapPanelEdges({
+          ...origin,
+          x: Math.max(0, Math.min(GRID_COLUMNS - origin.width, origin.x + offsetX / columnStep)),
+          y: Math.max(0, origin.y + offsetY / GRID_ROW_HEIGHT),
+        });
+        next = {
+          ...next,
+          x: edgeLocks.x !== null ? edgeLayout.x : next.x,
+          y: edgeLocks.y !== null ? edgeLayout.y : next.y,
+        };
+      } else {
+        const edgeLayout = snapPanelEdges({
+          ...origin,
+          width: Math.max(minimum.width, Math.min(GRID_COLUMNS - origin.x, origin.width + offsetX / columnStep)),
+          height: Math.max(minimum.height, origin.height + offsetY / GRID_ROW_HEIGHT),
+        });
+        next = { ...next,
+          width: edgeLocks.x !== null ? edgeLayout.width : next.width,
+          height: edgeLocks.y !== null ? edgeLayout.height : next.height };
+      }
+      if (snap) next = alignPanelEdges(next, layoutInteraction.kind === 'move'
+        ? { width: origin.width, height: origin.height } : minimum);
+      movingLayout = next;
+      const candidate = placePanelWithoutOverlap(layoutInteraction.panels, layoutInteraction.panelId, next);
+      diagnostics?.record('placement', { pointer: { x: event.clientX, y: event.clientY },
+        offsetPx: { x: offsetX, y: offsetY }, gridSnap: snap,
+        layout: { ...next }, edgeLocks: { ...edgeLocks }, previousLocks,
+        calculationMs: performance.now() - calculationStart,
+        displaced: candidate.filter((panel, index) => panel.id !== layoutInteraction.panelId
+          && Math.abs(panel.layout.y - layoutInteraction.panels[index].layout.y) > 1e-7).map((panel) => panel.id) });
+      if (snap) {
+        acceptedPanels = candidate;
+      } else {
+        // Debounce changes in which neighbors are displaced, not pointer motion.
+        // A steady drag still previews placement without waiting for the mouse to stop.
+        const topology = candidate.filter((panel, index) => panel.id !== layoutInteraction.panelId
+          && Math.abs(panel.layout.y - layoutInteraction.panels[index].layout.y) > 1e-7)
+          .map((panel) => panel.id).join('|');
+        if (topology !== pendingTopology) clearPreviewTimer();
+        if (topology !== pendingTopology) diagnostics?.record('reflow-topology', { topology });
+        pendingTopology = topology;
+        pendingPanels = candidate;
+        const neighborsChanged = candidate.some((panel, index) => panel.id !== layoutInteraction.panelId
+          && Math.abs(panel.layout.y - acceptedPanels[index].layout.y) > 1e-7);
+        if (!neighborsChanged) clearPreviewTimer();
+        else if (previewTimer === null) {
+          previewTimer = setTimeout(() => {
+            previewTimer = null;
+            diagnostics?.record('reflow-accepted', { topology: pendingTopology });
+            capturePanelRectsBeforeReflow();
+            acceptedPanels = pendingPanels;
+            publishPreview();
+          }, LAYOUT_PREVIEW_DEBOUNCE_MS);
+        }
+      }
+      publishPreview();
+    };
+
+    const move = (event: PointerEvent) => {
+      diagnostics?.pointer(event, frame !== null);
+      latestPointer = { clientX: event.clientX, clientY: event.clientY };
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        if (latestPointer) previewAt(latestPointer, false);
+      });
     };
 
     const finish = (commit: boolean) => {
+      clearPreviewTimer();
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = null;
+      if (commit && latestPointer) previewAt(latestPointer, true);
+      capturePanelRectsBeforeReflow();
       const preview = layoutPreviewRef.current;
-      if (commit && preview) updateScopePanels(() => preview);
+      if (commit && preview) updateScopePanels(() => collapsedPanelIds.size > 0
+        ? restoreExpandedLayouts(preview, layoutInteraction.expandedPanels, collapsedPanelIds)
+        : preview);
       layoutPreviewRef.current = null;
       setLayoutPreview(null);
       setLayoutInteraction(null);
+      diagnostics?.finish(commit ? 'commit' : 'cancel');
     };
     const pointerUp = () => finish(true);
+    const pointerCancel = () => finish(false);
     const keyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') finish(false);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', pointerUp, { once: true });
-    window.addEventListener('pointercancel', pointerUp, { once: true });
+    window.addEventListener('pointercancel', pointerCancel, { once: true });
     window.addEventListener('keydown', keyDown);
     return () => {
+      diagnostics?.finish('effect-cleanup');
+      if (dragDiagnosticsRef.current === diagnostics) dragDiagnosticsRef.current = null;
+      clearPreviewTimer();
+      if (frame !== null) cancelAnimationFrame(frame);
       document.body.classList.remove('layout-interacting');
       delete document.body.dataset.layoutInteraction;
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', pointerUp);
-      window.removeEventListener('pointercancel', pointerUp);
+      window.removeEventListener('pointercancel', pointerCancel);
       window.removeEventListener('keydown', keyDown);
     };
-  }, [layoutInteraction, updateScopePanels, gridGap]);
+  }, [layoutInteraction, updateScopePanels, collapsedPanelIds, capturePanelRectsBeforeReflow]);
 
   const setScopeChannelKeys = useCallback((scopeId: string, channelKeys: string[]) => {
     updateScopePanels((panels) => panels.map((panel) => panel.id === scopeId
@@ -1580,59 +1826,13 @@ export default function App() {
       ? 'Start an application using the C, C++, or Python SDK. Channels appear automatically.'
       : channels.length === 0
         ? 'The source is connected. Send its first sample to create a channel.'
-        : 'Enable a channel from the sidebar to start plotting.';
-
-  const setSidebarWidth = (width: number) => {
-    const nextWidth = Math.round(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width)));
-    setSettings((current) => current.sidebarWidth === nextWidth
-      ? current
-      : { ...current, sidebarWidth: nextWidth });
-  };
-
-  const startSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    sidebarResizeRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startWidth: settings.sidebarWidth,
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-    document.documentElement.classList.add('sidebar-resizing');
-  };
-
-  const moveSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
-    const resize = sidebarResizeRef.current;
-    if (!resize || resize.pointerId !== event.pointerId) return;
-    setSidebarWidth(resize.startWidth + event.clientX - resize.startX);
-  };
-
-  const stopSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
-    const resize = sidebarResizeRef.current;
-    if (!resize || resize.pointerId !== event.pointerId) return;
-    sidebarResizeRef.current = null;
-    document.documentElement.classList.remove('sidebar-resizing');
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
-
-  const resizeSidebarWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    let nextWidth = settings.sidebarWidth;
-    if (event.key === 'ArrowLeft') nextWidth -= 12;
-    else if (event.key === 'ArrowRight') nextWidth += 12;
-    else if (event.key === 'Home') nextWidth = MIN_SIDEBAR_WIDTH;
-    else if (event.key === 'End') nextWidth = MAX_SIDEBAR_WIDTH;
-    else return;
-    event.preventDefault();
-    setSidebarWidth(nextWidth);
-  };
+        : 'Enable a channel from the Programs & Channels panel to start plotting.';
 
   return (
     <div
-      className={`app-shell${sidebarOpen ? ' sidebar-open' : ''}${settings.sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
+      className="app-shell"
       data-visual-style={settings.visualStyle}
-      style={{ '--sidebar-width': `${settings.sidebarWidth}px`, '--panel-gap': `${gridGap}px` } as React.CSSProperties}
+      style={{ '--panel-gap': `${gridGap}px` } as React.CSSProperties}
     >
       <header className="app-bar">
         <div className="brand-block">
@@ -1641,21 +1841,6 @@ export default function App() {
           </span>
           <strong>DebugScope</strong>
           <span className="preview-badge">PREVIEW</span>
-          <button
-            className="sidebar-toggle"
-            type="button"
-            aria-label={sidebarToggleLabel}
-            aria-expanded={sidebarVisible}
-            title={sidebarToggleLabel}
-            onClick={() => {
-              if (narrowLayout) setSidebarOpen((open) => !open);
-              else setSettings((current) => ({ ...current, sidebarCollapsed: !current.sidebarCollapsed }));
-            }}
-          >
-            {sidebarVisible
-              ? <ChevronLeft size={14} aria-hidden="true" />
-              : <ChevronRight size={14} aria-hidden="true" />}
-          </button>
         </div>
 
         <div className="app-context">
@@ -1758,343 +1943,11 @@ export default function App() {
         </div>
       </header>
 
-      <aside className="sidebar" aria-label="Sources and channels">
-        <section className="sidebar-section source-section">
-          <div className="section-heading">
-            <span>PROGRAMS</span>
-            <span className="section-heading-actions">
-              <span className="channel-count">{telemetry.sources.length}</span>
-              {telemetry.mode === 'live' && (
-                <button
-                  className={`section-add-button${hubEditorOpen ? ' active' : ''}`}
-                  type="button"
-                  onClick={() => {
-                    setHubEditorOpen((open) => !open);
-                    setHubAddressError('');
-                  }}
-                  aria-label="Add Hub address"
-                  aria-expanded={hubEditorOpen}
-                  title="Connect to another DebugScope Hub"
-                  data-hub-editor-trigger
-                >
-                  <Plus size={13} />
-                </button>
-              )}
-            </span>
-          </div>
-
-          {hubEditorOpen && telemetry.mode === 'live' && (
-            <div className="hub-editor">
-              <form className="hub-address-form" onSubmit={addHub}>
-                <label htmlFor="hub-address">Hub address</label>
-                <div>
-                  <input
-                    id="hub-address"
-                    type="text"
-                    value={hubAddress}
-                    onChange={(event) => {
-                      setHubAddress(event.target.value);
-                      setHubAddressError('');
-                    }}
-                    placeholder="192.168.1.20:4713"
-                    aria-invalid={Boolean(hubAddressError)}
-                    autoFocus
-                  />
-                  <button type="submit" disabled={!hubAddress.trim()}>Add</button>
-                </div>
-                {hubAddressError && <small role="alert">{hubAddressError}</small>}
-              </form>
-              <div className="hub-list" aria-label="Configured Hub addresses">
-                {telemetry.hubs.map((hub) => (
-                  <div className="hub-row" key={hub.id}>
-                    <i className={`connection-dot tiny${hub.connection === 'connected' ? '' : ' stale'}`} />
-                    <span title={hub.address}>{hub.address.replace(/^wss?:\/\//, '')}</span>
-                    {hub.removable && (
-                      <button
-                        type="button"
-                        onClick={() => telemetry.removeHub(hub.id)}
-                        aria-label={`Remove Hub ${hub.address}`}
-                      >
-                        <X size={12} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="source-list">
-            {telemetry.sources.map((source) => (
-              <div
-                className={`source-card${source.id === telemetry.activeSourceId ? ' active' : ''}`}
-                key={source.id}
-              >
-                <button
-                  className="source-select"
-                  type="button"
-                  onClick={() => {
-                    telemetry.setActiveSourceId(source.id);
-                    setSidebarOpen(false);
-                  }}
-                >
-                  <span className="source-icon"><Server size={16} /></span>
-                  <span className="source-copy">
-                    <strong>{source.name}</strong>
-                    <small>
-                      {source.sdkName ?? 'Unknown SDK'}
-                      {source.processId !== undefined ? ` · PID ${source.processId}` : ''}
-                      {telemetry.hubs.length > 1 && source.hubAddress
-                        ? ` · ${source.hubAddress.replace(/^wss?:\/\//, '').replace(/\/api\/ws$/, '')}`
-                        : ''}
-                    </small>
-                  </span>
-                  <span
-                    className={`connection-dot${source.active ? '' : ' stale'}`}
-                    title={source.active ? 'Running' : 'Stopped'}
-                  />
-                </button>
-                {telemetry.mode === 'live' && (
-                  <button
-                    className="source-delete"
-                    type="button"
-                    onClick={() => telemetry.deleteSource(source.id)}
-                    aria-label={`Delete ${source.name}`}
-                    title="Delete this program and its history"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                )}
-              </div>
-            ))}
-
-            {telemetry.sources.length === 0 && (
-              <div className="source-empty">
-                {connected ? <Radio size={16} /> : <WifiOff size={16} />}
-                <span>
-                  <strong>{connected ? 'No programs yet' : 'Hub unavailable'}</strong>
-                  <small>{connected ? 'Listening on UDP 4711' : 'Retrying automatically'}</small>
-                </span>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <section className="sidebar-section channels-section">
-          <div className="section-heading channel-heading">
-            <span className="channel-heading-title">
-              CHANNELS
-              <small>{activeScope?.title ?? 'Scope'}</small>
-            </span>
-            <span className="channel-count">{activeScopeChannelIds.size} / {channels.length}</span>
-          </div>
-
-          <label className="search-box">
-            <Search size={14} />
-            <input
-              type="search"
-              placeholder="Filter channels"
-              value={channelSearch}
-              onChange={(event) => setChannelSearch(event.target.value)}
-              disabled={channels.length === 0}
-            />
-            {channelSearch && (
-              <button type="button" onClick={() => setChannelSearch('')} aria-label="Clear channel filter">
-                <X size={13} />
-              </button>
-            )}
-          </label>
-
-          {groupedChannels.map(([group, groupChannels], groupIndex) => {
-            const collapsed = !channelSearch.trim() && collapsedGroupsForSource.has(group);
-            const groupContentId = `channel-group-${groupIndex}`;
-            return (
-            <div className={`channel-group${collapsed ? ' collapsed' : ''}`} key={group}>
-              <button
-                className="group-label"
-                type="button"
-                onClick={() => toggleChannelGroup(group)}
-                aria-label={`${group} channel group`}
-                aria-expanded={!collapsed}
-                aria-controls={groupContentId}
-              >
-                <ChevronDown size={14} aria-hidden="true" />
-                <span>{group}</span>
-                <b>{groupChannels.length}</b>
-              </button>
-
-              {!collapsed && <div className="channel-list" id={groupContentId}>
-                {groupChannels.map((channel) => {
-                  const channelIndex = channelIndexes.get(channel.id) ?? -1;
-                  const visible = activeScopeChannelIds.has(channel.id);
-                  const selected = selectedChannel === channel.id;
-
-                  return (
-                    <div
-                      className={`channel-row${selected ? ' selected' : ''}${visible ? '' : ' hidden'}`}
-                      key={channel.id}
-                      role="button"
-                      aria-label={channel.key}
-                      tabIndex={0}
-                      onClick={() => setSelectedChannel(channel.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') setSelectedChannel(channel.id);
-                      }}
-                    >
-                      <button
-                        className="visibility-button"
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (activeScope) toggleScopeChannel(activeScope.id, channel.key);
-                        }}
-                        aria-label={`${visible ? 'Hide' : 'Show'} ${channel.label}`}
-                        aria-pressed={visible}
-                      >
-                        {visible ? <Eye size={14} /> : <EyeOff size={14} />}
-                      </button>
-                      <span
-                        className="channel-swatch"
-                        style={{ '--channel-color': channel.color } as React.CSSProperties}
-                      />
-                      <span className="channel-copy" title={channel.key}>
-                        <strong>{channel.label}</strong>
-                      </span>
-                      <span className="channel-value">
-                        <b>{formatValue(telemetry.latest[channelIndex] ?? channel.lastValue ?? 0)}</b>
-                        <small>{channel.unit || channel.valueType || 'number'}</small>
-                      </span>
-                      <button
-                        className={`style-button${styleEditorChannelId === channel.id ? ' active' : ''}`}
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setSelectedChannel(channel.id);
-                          setStyleEditorChannelId((current) => current === channel.id ? null : channel.id);
-                        }}
-                        aria-label={`Style ${channel.label}`}
-                        aria-expanded={styleEditorChannelId === channel.id}
-                      >
-                        <Palette size={13} />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>}
-            </div>
-            );
-          })}
-
-          {filteredChannels.length === 0 && channelSearch && (
-            <div className="no-channel-results">No matching channels</div>
-          )}
-
-          {styleEditorChannel && (
-            <div className="style-editor" role="dialog" aria-label={`Style ${styleEditorChannel.label}`}>
-              <div className="style-editor-header">
-                <span><Palette size={13} /> Signal style</span>
-                <button type="button" onClick={() => setStyleEditorChannelId(null)} aria-label="Close style editor">
-                  <X size={13} />
-                </button>
-              </div>
-              <div className="style-fields">
-                <label className="color-field">
-                  <span>Color</span>
-                  <span className="color-control">
-                    <input
-                      type="color"
-                      value={styleEditorChannel.color}
-                      onChange={(event) => updateChannelStyle(styleEditorChannel, { color: event.target.value })}
-                      aria-label={`Color for ${styleEditorChannel.label}`}
-                    />
-                    <code>{styleEditorChannel.color.toUpperCase()}</code>
-                  </span>
-                </label>
-                <div className="style-field">
-                  <span>Curve</span>
-                  <PreviewSelect
-                    value={styleEditorChannel.lineCurve}
-                    onChange={(lineCurve) => updateChannelStyle(styleEditorChannel, {
-                      lineCurve,
-                    })}
-                    ariaLabel={`Curve for ${styleEditorChannel.label}`}
-                    color={styleEditorChannel.color}
-                    kind="curve"
-                    options={CURVE_OPTIONS}
-                  />
-                </div>
-                <div className="style-field">
-                  <span>Stroke</span>
-                  <PreviewSelect
-                    value={styleEditorChannel.linePattern}
-                    onChange={(linePattern) => updateChannelStyle(styleEditorChannel, {
-                      linePattern,
-                    })}
-                    ariaLabel={`Stroke for ${styleEditorChannel.label}`}
-                    color={styleEditorChannel.color}
-                    kind="pattern"
-                    options={PATTERN_OPTIONS}
-                  />
-                </div>
-                <label>
-                  <span>Width</span>
-                  <select
-                    value={styleEditorChannel.lineWidth}
-                    onChange={(event) => updateChannelStyle(styleEditorChannel, {
-                      lineWidth: Number(event.target.value),
-                    })}
-                    aria-label={`Width for ${styleEditorChannel.label}`}
-                  >
-                    <option value={1}>1 px</option>
-                    <option value={1.5}>1.5 px</option>
-                    <option value={2}>2 px</option>
-                    <option value={2.5}>2.5 px</option>
-                    <option value={3}>3 px</option>
-                  </select>
-                </label>
-              </div>
-              <button
-                className="reset-style"
-                type="button"
-                onClick={() => resetChannelStyle(styleEditorChannel)}
-              >
-                <RotateCcw size={12} /> Reset default
-              </button>
-            </div>
-          )}
-        </section>
-
-        <div
-          className="sidebar-resize-handle"
-          role="separator"
-          tabIndex={0}
-          aria-label="Resize sidebar"
-          aria-orientation="vertical"
-          aria-valuemin={MIN_SIDEBAR_WIDTH}
-          aria-valuemax={MAX_SIDEBAR_WIDTH}
-          aria-valuenow={settings.sidebarWidth}
-          title="Drag to resize sidebar · double-click to reset"
-          onPointerDown={startSidebarResize}
-          onPointerMove={moveSidebarResize}
-          onPointerUp={stopSidebarResize}
-          onPointerCancel={stopSidebarResize}
-          onLostPointerCapture={stopSidebarResize}
-          onKeyDown={resizeSidebarWithKeyboard}
-          onDoubleClick={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
-        />
-      </aside>
-
-      <button
-        className="sidebar-scrim"
-        type="button"
-        aria-label="Close channels"
-        onClick={() => setSidebarOpen(false)}
-      />
-
       <main className="workspace">
         <div
           className="scope-grid"
           ref={gridRef}
+          style={layoutInteraction ? { minHeight: layoutInteraction.workspaceHeight } : undefined}
         >
           {displayedPanels.map((panel) => {
             const panelChannelKeys = new Set(effectivePanelChannelKeys(panel, channels));
@@ -2114,14 +1967,16 @@ export default function App() {
                 aria-label={panel.title}
                 aria-expanded={!panelCollapsed}
                 key={panel.id}
-                onPointerDown={() => setActiveScopeId(panel.id)}
+                onPointerDown={() => { if (panel.type !== 'sources') setActiveScopeId(panel.id); }}
                 data-panel-id={panel.id}
                 data-grid-x={panel.layout.x}
                 data-grid-y={panel.layout.y}
                 data-grid-width={panel.layout.width}
                 data-grid-height={panel.layout.height}
                 style={{
-                  gridColumn: `${panel.layout.x + 1} / span ${panel.layout.width}`,
+                  gridColumn: '1 / -1',
+                  width: `calc(${panel.layout.width / GRID_COLUMNS * 100}% - ${gridGap}px)`,
+                  marginLeft: `${panel.layout.x / GRID_COLUMNS * 100}%`,
                   gridRow: `${Math.round(panel.layout.y * GRID_ROW_HEIGHT) + 1} / span ${Math.round(panel.layout.height * GRID_ROW_HEIGHT)}`,
                 }}
               >
@@ -2141,8 +1996,7 @@ export default function App() {
                     type="button"
                     onPointerDown={(event) => beginLayoutInteraction(event, panel, 'move')}
                     aria-label={`Move ${panel.title}`}
-                    disabled={collapsedPanelIds.size > 0}
-                    title={collapsedPanelIds.size > 0 ? 'Expand all panels to rearrange them' : 'Drag to move panel'}
+                    title="Drag to move panel"
                   >
                     <GripVertical size={14} />
                   </button>
@@ -2173,10 +2027,10 @@ export default function App() {
                         <button
                           className="panel-title-button"
                           type="button"
-                          onClick={() => setActiveScopeId(panel.id)}
+                          onClick={() => { if (panel.type !== 'sources') setActiveScopeId(panel.id); }}
                           onDoubleClick={(event) => {
                             event.stopPropagation();
-                            setActiveScopeId(panel.id);
+                            if (panel.type !== 'sources') setActiveScopeId(panel.id);
                             setPanelTitleDraft(panel.title);
                             setEditingPanelTitleId(panel.id);
                           }}
@@ -2221,7 +2075,7 @@ export default function App() {
 
                   {panelCollapsed && (
                     <span className="collapsed-panel-summary">
-                      {panelVisibleChannels.size} channel{panelVisibleChannels.size === 1 ? '' : 's'}
+                      {panel.type === 'sources' ? channels.length : panelVisibleChannels.size} channels
                     </span>
                   )}
 
@@ -2267,7 +2121,7 @@ export default function App() {
                         <Palette size={13} />
                       </button>
                     )}
-                    {!panelCollapsed && <button
+                    {!panelCollapsed && panel.type !== 'sources' && <button
                       className={`scope-action${pickerOpen ? ' active' : ''}`}
                       type="button"
                       onClick={() => setChannelPickerScopeId((current) => current === panel.id ? null : panel.id)}
@@ -2280,7 +2134,7 @@ export default function App() {
                       <SlidersHorizontal size={14} />
                       <span>{panelVisibleChannels.size}</span>
                     </button>}
-                    {scopePanels.length > 1 && (
+                    {panel.type !== 'sources' && scopePanels.filter((item) => item.type !== 'sources').length > 1 && (
                       <button
                         className="scope-action danger"
                         type="button"
@@ -2294,6 +2148,328 @@ export default function App() {
                   </div>
                 </div>
 
+                {!panelCollapsed && panel.type === 'sources' && (
+                  <div className="sources-panel-content">
+                    <section className={`sidebar-section source-section${settings.programsCollapsed ? ' collapsed' : ''}`}>
+                      <div className="section-heading">
+                        <button
+                          className="sidebar-section-toggle"
+                          type="button"
+                          onClick={() => setSettings((current) => ({
+                            ...current,
+                            programsCollapsed: !current.programsCollapsed,
+                          }))}
+                          aria-label={`${settings.programsCollapsed ? 'Expand' : 'Collapse'} programs`}
+                          aria-expanded={!settings.programsCollapsed}
+                          aria-controls="sidebar-programs-content"
+                        >
+                          <ChevronDown size={13} aria-hidden="true" />
+                          <span>PROGRAMS</span>
+                        </button>
+                        <span className="section-heading-actions">
+                          <span className="channel-count">{telemetry.sources.length}</span>
+                          {telemetry.mode === 'live' && (
+                            <button
+                              className={`section-add-button${hubEditorOpen ? ' active' : ''}`}
+                              type="button"
+                              onClick={() => {
+                                setSettings((current) => ({ ...current, programsCollapsed: false }));
+                                setHubEditorOpen((open) => !open);
+                                setHubAddressError('');
+                              }}
+                              aria-label="Add Hub address"
+                              aria-expanded={hubEditorOpen}
+                              title="Connect to another DebugScope Hub"
+                              data-hub-editor-trigger
+                            >
+                              <Plus size={13} />
+                            </button>
+                          )}
+                        </span>
+                      </div>
+
+                      {!settings.programsCollapsed && (
+                      <div className="sidebar-section-content" id="sidebar-programs-content">
+                      {hubEditorOpen && telemetry.mode === 'live' && (
+                        <div className="hub-editor">
+                          <form className="hub-address-form" onSubmit={addHub}>
+                            <label htmlFor="hub-address">Hub address</label>
+                            <div>
+                              <input
+                                id="hub-address"
+                                type="text"
+                                value={hubAddress}
+                                onChange={(event) => {
+                                  setHubAddress(event.target.value);
+                                  setHubAddressError('');
+                                }}
+                                placeholder="192.168.1.20:4713"
+                                aria-invalid={Boolean(hubAddressError)}
+                                autoFocus
+                              />
+                              <button type="submit" disabled={!hubAddress.trim()}>Add</button>
+                            </div>
+                            {hubAddressError && <small role="alert">{hubAddressError}</small>}
+                          </form>
+                          <div className="hub-list" aria-label="Configured Hub addresses">
+                            {telemetry.hubs.map((hub) => (
+                              <div className="hub-row" key={hub.id}>
+                                <i className={`connection-dot tiny${hub.connection === 'connected' ? '' : ' stale'}`} />
+                                <span title={hub.address}>{hub.address.replace(/^wss?:\/\//, '')}</span>
+                                {hub.removable && (
+                                  <button
+                                    type="button"
+                                    onClick={() => telemetry.removeHub(hub.id)}
+                                    aria-label={`Remove Hub ${hub.address}`}
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="source-list">
+                        {telemetry.sources.map((source) => (
+                          <div
+                            className={`source-card${source.id === telemetry.activeSourceId ? ' active' : ''}`}
+                            key={source.id}
+                          >
+                            <button
+                              className="source-select"
+                              type="button"
+                              onClick={() => {
+                                telemetry.setActiveSourceId(source.id);
+                              }}
+                            >
+                              <span className="source-icon"><Server size={16} /></span>
+                              <span className="source-copy">
+                                <strong>{source.name}</strong>
+                                <small>
+                                  {source.sdkName ?? 'Unknown SDK'}
+                                  {source.processId !== undefined ? ` · PID ${source.processId}` : ''}
+                                  {telemetry.hubs.length > 1 && source.hubAddress
+                                    ? ` · ${source.hubAddress.replace(/^wss?:\/\//, '').replace(/\/api\/ws$/, '')}`
+                                    : ''}
+                                </small>
+                              </span>
+                              <span
+                                className={`connection-dot${source.active ? '' : ' stale'}`}
+                                title={source.active ? 'Running' : 'Stopped'}
+                              />
+                            </button>
+                            {telemetry.mode === 'live' && (
+                              <button
+                                className="source-delete"
+                                type="button"
+                                onClick={() => telemetry.deleteSource(source.id)}
+                                aria-label={`Delete ${source.name}`}
+                                title="Delete this program and its history"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+
+                        {telemetry.sources.length === 0 && (
+                          <div className="source-empty">
+                            {connected ? <Radio size={16} /> : <WifiOff size={16} />}
+                            <span>
+                              <strong>{connected ? 'No programs yet' : 'Hub unavailable'}</strong>
+                              <small>{connected ? 'Listening on UDP 4711' : 'Retrying automatically'}</small>
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      </div>
+                      )}
+                    </section>
+
+                    <section className={`sidebar-section channels-section${settings.channelsCollapsed ? ' collapsed' : ''}`}>
+                      <div className="section-heading channel-heading">
+                        <button
+                          className="sidebar-section-toggle"
+                          type="button"
+                          onClick={() => setSettings((current) => ({
+                            ...current,
+                            channelsCollapsed: !current.channelsCollapsed,
+                          }))}
+                          aria-label={`${settings.channelsCollapsed ? 'Expand' : 'Collapse'} channels`}
+                          aria-expanded={!settings.channelsCollapsed}
+                          aria-controls="sidebar-channels-content"
+                        >
+                          <ChevronDown size={13} aria-hidden="true" />
+                          <span className="channel-heading-title">
+                            CHANNELS
+                            <small>{activeScope?.title ?? 'Scope'}</small>
+                          </span>
+                        </button>
+                        <span className="channel-count">{activeScopeChannelIds.size} / {channels.length}</span>
+                      </div>
+
+                      {!settings.channelsCollapsed && (
+                      <div className="sidebar-section-content" id="sidebar-channels-content">
+                      <label className="search-box">
+                        <Search size={14} />
+                        <input
+                          type="search"
+                          placeholder="Filter channels"
+                          value={channelSearch}
+                          onChange={(event) => setChannelSearch(event.target.value)}
+                          disabled={channels.length === 0}
+                        />
+                        {channelSearch && (
+                          <button type="button" onClick={() => setChannelSearch('')} aria-label="Clear channel filter">
+                            <X size={13} />
+                          </button>
+                        )}
+                      </label>
+
+                      <ChannelGroupTree channels={filteredChannels} collapsed={collapsedGroupsForSource}
+                        searching={Boolean(channelSearch.trim())} onToggle={toggleChannelGroup}
+                        renderChannel={(channel) => {
+                              const channelIndex = channelIndexes.get(channel.id) ?? -1;
+                              const visible = activeScopeChannelIds.has(channel.id);
+                              const selected = selectedChannel === channel.id;
+
+                              return (
+                                <div
+                                  className={`channel-row${selected ? ' selected' : ''}${visible ? '' : ' hidden'}`}
+                                  key={channel.id}
+                                  role="button"
+                                  aria-label={channel.key}
+                                  tabIndex={0}
+                                  onClick={() => setSelectedChannel(channel.id)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter' || event.key === ' ') setSelectedChannel(channel.id);
+                                  }}
+                                >
+                                  <button
+                                    className="visibility-button"
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      if (activeScope) toggleScopeChannel(activeScope.id, channel.key);
+                                    }}
+                                    aria-label={`${visible ? 'Hide' : 'Show'} ${channel.label}`}
+                                    aria-pressed={visible}
+                                  >
+                                    {visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                                  </button>
+                                  <span
+                                    className="channel-swatch"
+                                    style={{ '--channel-color': channel.color } as React.CSSProperties}
+                                  />
+                                  <span className="channel-copy" title={channel.key}>
+                                    <strong>{channel.label}</strong>
+                                  </span>
+                                  <span className="channel-value">
+                                    <b>{formatValue(telemetry.latest[channelIndex] ?? channel.lastValue ?? 0)}</b>
+                                    <small>{channel.unit || channel.valueType || 'number'}</small>
+                                  </span>
+                                  <button
+                                    className={`style-button${styleEditorChannelId === channel.id ? ' active' : ''}`}
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setSelectedChannel(channel.id);
+                                      setStyleEditorChannelId((current) => current === channel.id ? null : channel.id);
+                                    }}
+                                    aria-label={`Style ${channel.label}`}
+                                    aria-expanded={styleEditorChannelId === channel.id}
+                                  >
+                                    <Palette size={13} />
+                                  </button>
+                                </div>
+                              );
+                        }} />
+
+                      {filteredChannels.length === 0 && channelSearch && (
+                        <div className="no-channel-results">No matching channels</div>
+                      )}
+
+                      {styleEditorChannel && (
+                        <div className="style-editor" role="dialog" aria-label={`Style ${styleEditorChannel.label}`}>
+                          <div className="style-editor-header">
+                            <span><Palette size={13} /> Signal style</span>
+                            <button type="button" onClick={() => setStyleEditorChannelId(null)} aria-label="Close style editor">
+                              <X size={13} />
+                            </button>
+                          </div>
+                          <div className="style-fields">
+                            <label className="color-field">
+                              <span>Color</span>
+                              <span className="color-control">
+                                <input
+                                  type="color"
+                                  value={styleEditorChannel.color}
+                                  onChange={(event) => updateChannelStyle(styleEditorChannel, { color: event.target.value })}
+                                  aria-label={`Color for ${styleEditorChannel.label}`}
+                                />
+                                <code>{styleEditorChannel.color.toUpperCase()}</code>
+                              </span>
+                            </label>
+                            <div className="style-field">
+                              <span>Curve</span>
+                              <PreviewSelect
+                                value={styleEditorChannel.lineCurve}
+                                onChange={(lineCurve) => updateChannelStyle(styleEditorChannel, {
+                                  lineCurve,
+                                })}
+                                ariaLabel={`Curve for ${styleEditorChannel.label}`}
+                                color={styleEditorChannel.color}
+                                kind="curve"
+                                options={CURVE_OPTIONS}
+                              />
+                            </div>
+                            <div className="style-field">
+                              <span>Stroke</span>
+                              <PreviewSelect
+                                value={styleEditorChannel.linePattern}
+                                onChange={(linePattern) => updateChannelStyle(styleEditorChannel, {
+                                  linePattern,
+                                })}
+                                ariaLabel={`Stroke for ${styleEditorChannel.label}`}
+                                color={styleEditorChannel.color}
+                                kind="pattern"
+                                options={PATTERN_OPTIONS}
+                              />
+                            </div>
+                            <label>
+                              <span>Width</span>
+                              <select
+                                value={styleEditorChannel.lineWidth}
+                                onChange={(event) => updateChannelStyle(styleEditorChannel, {
+                                  lineWidth: Number(event.target.value),
+                                })}
+                                aria-label={`Width for ${styleEditorChannel.label}`}
+                              >
+                                <option value={1}>1 px</option>
+                                <option value={1.5}>1.5 px</option>
+                                <option value={2}>2 px</option>
+                                <option value={2.5}>2.5 px</option>
+                                <option value={3}>3 px</option>
+                              </select>
+                            </label>
+                          </div>
+                          <button
+                            className="reset-style"
+                            type="button"
+                            onClick={() => resetChannelStyle(styleEditorChannel)}
+                          >
+                            <RotateCcw size={12} /> Reset default
+                          </button>
+                        </div>
+                      )}
+                      </div>
+                      )}
+                    </section>
+
+                  </div>
+                )}
                 {!panelCollapsed && panel.type === 'scope' && (
                   <WaveformPlot
                     channels={channels}
@@ -2392,7 +2568,7 @@ export default function App() {
                         </button>
                       </div>
 
-                      {panel.type !== 'scope' && numberedChannelGroups.length > 0 && (
+                      {panel.type !== 'scope' && panel.type !== 'sources' && numberedChannelGroups.length > 0 && (
                         <div className="scope-picker-groups">
                           <span>NUMBERED GROUPS</span>
                           <div>
@@ -2450,8 +2626,7 @@ export default function App() {
                   type="button"
                   onPointerDown={(event) => beginLayoutInteraction(event, panel, 'resize')}
                   aria-label={`Resize ${panel.title}`}
-                  disabled={collapsedPanelIds.size > 0}
-                  title={collapsedPanelIds.size > 0 ? 'Expand all panels to rearrange them' : 'Drag to resize panel'}
+                  title="Drag to resize panel"
                 />}
               </section>
             );
