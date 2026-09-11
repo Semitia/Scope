@@ -187,6 +187,10 @@ export function useHubTelemetry({
       const hubSources = catalog.map((source) => {
         const id = localSourceId(store, hub.definition.id, source.id);
         nextIds.add(id);
+        const keys = new Set(source.channels.map((channel) => channel.key));
+        for (const [key, channel] of store.channels) {
+          if (channel.definition.sourceId === id && !keys.has(channel.definition.key)) store.channels.delete(key);
+        }
         for (const channel of source.channels) upsertChannel(store, channel, id);
         return {
           id, remoteId: source.id, hubId: hub.definition.id, hubAddress: hub.definition.address,
@@ -307,6 +311,12 @@ export function useHubTelemetry({
       .filter((channel) => channel.definition.sourceId === activeSourceId)
       .sort((left, right) => left.definition.key.localeCompare(right.definition.key));
   }, [activeSourceId, version]);
+  // Preserve the catalog identity across UI-only renders. Copy definitions so
+  // incoming batches cannot mutate the snapshot currently displayed by React.
+  const channels = useMemo(
+    () => activeChannels.map((channel) => ({ ...channel.definition })),
+    [activeChannels],
+  );
   const aligned = useMemo(() => {
     const timestampSet = new Set<number>();
     for (const channel of activeChannels) for (const [timestamp] of channel.samples) timestampSet.add(timestamp);
@@ -354,6 +364,14 @@ export function useHubTelemetry({
       type: 'deleteSource', sourceId: source.remoteId,
     }));
   }, []);
+  const deleteChannels = useCallback((sourceId: number, keys: string[]) => {
+    const source = storeRef.current.sources.find((candidate) => candidate.id === sourceId);
+    if (!source?.hubId || source.remoteId === undefined) return;
+    const socket = storeRef.current.hubs.get(source.hubId)?.socket;
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({
+      type: 'deleteChannels', sourceId: source.remoteId, keys,
+    }));
+  }, []);
   const addHub = useCallback((address: string) => {
     const normalized = normalizeHubAddress(address);
     if (!normalized || normalized === defaultAddress || manualAddresses.includes(normalized)) return false;
@@ -374,9 +392,9 @@ export function useHubTelemetry({
 
   return {
     mode: 'live', connection, sources, activeSourceId, setActiveSourceId: setActiveSourceIdState,
-    channels: activeChannels.map((channel) => channel.definition), data: aligned.data,
+    channels, data: aligned.data,
     latest: aligned.latest, latestTime: aligned.latestTime, version,
-    sampleRate: totals.sampleRate, memoryBytes: totals.memoryBytes, now, clear, deleteSource,
+    sampleRate: totals.sampleRate, memoryBytes: totals.memoryBytes, now, clear, deleteSource, deleteChannels,
     hubs, addHub, removeHub,
   };
 }

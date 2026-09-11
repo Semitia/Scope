@@ -138,7 +138,7 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await yAxisMode.selectOption('zero-max');
   await expect(yAxisMode).toHaveValue('zero-max');
   await yAxisMode.selectOption('manual');
-  await expect(yAxisMode.locator('..')).toHaveAttribute('title', /wheel to zoom Y/);
+  await expect(yAxisMode.locator('..')).toHaveAttribute('title', /Ctrl\+wheel to zoom Y/);
   await yAxisMode.selectOption('fit');
 
   await page.getByRole('button', { name: 'Style Error', exact: true }).click();
@@ -330,12 +330,16 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   const plotOverlay = page.locator('.u-over');
   await yAxisMode.selectOption('manual');
   await plotOverlay.hover({ position: { x: 300, y: 100 } });
+  await page.keyboard.down('Control');
   await page.mouse.wheel(0, -220);
+  await page.keyboard.up('Control');
   await expect(page.getByRole('button', { name: 'Return to live' })).toBeHidden();
   await plotOverlay.dblclick({ position: { x: 300, y: 100 } });
   await yAxisMode.selectOption('fit');
   await plotOverlay.hover({ position: { x: 300, y: 100 } });
+  await page.keyboard.down('Control');
   await page.mouse.wheel(0, -220);
+  await page.keyboard.up('Control');
   await expect(page.getByRole('button', { name: 'Return to live' })).toBeVisible();
   await plotOverlay.dblclick({ position: { x: 300, y: 100 } });
   await expect(page.getByRole('button', { name: 'Return to live' })).toBeHidden();

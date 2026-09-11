@@ -60,8 +60,8 @@ test('Python SDK streams through UDP and Hub into the browser workbench', async 
   await expect(page.locator('.source-card strong').getByText('live-python', { exact: true })).toBeVisible({
     timeout: 10_000,
   });
-  await expect(page.getByText('controller.speed', { exact: true })).toBeVisible();
-  await expect(page.getByText('controller.target', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'controller.speed', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'controller.target', exact: true })).toBeVisible();
   await expect(page.locator('.channel-row')).toHaveCount(4);
   await expect(page.locator('.legend-item')).toHaveCount(4);
   await expect(page.locator('.uplot')).toBeVisible();

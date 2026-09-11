@@ -1,6 +1,7 @@
+import type { WristedSettings } from './wristed/config';
 import type { YScaleMode } from './types';
 
-export type PanelType = 'scope' | 'value-bar' | 'indicators' | 'sources';
+export type PanelType = 'scope' | 'value-bar' | 'indicators' | 'sources' | 'wristed';
 
 export interface StateColorDefinition {
   value: number;
@@ -55,7 +56,13 @@ export interface SourcesPanelDefinition extends BasePanelDefinition {
   type: 'sources';
 }
 
+export interface WristedPanelDefinition extends BasePanelDefinition {
+  type: 'wristed';
+  wristed: WristedSettings;
+}
+
 export type PanelDefinition =
+  | WristedPanelDefinition
   | SourcesPanelDefinition
   | ScopePanelDefinition
   | ValueBarPanelDefinition
@@ -69,6 +76,7 @@ export const DEFAULT_STATE_COLORS: StateColorDefinition[] = [
 ];
 
 export function panelTypeLabel(type: PanelType): string {
+  if (type === 'wristed') return 'Wristed instrument';
   if (type === 'sources') return 'Programs & Channels';
   if (type === 'value-bar') return 'Value bars';
   if (type === 'indicators') return 'Indicators';

@@ -8,7 +8,7 @@ function frame(
   timestampSeconds: number,
   value: number,
   sourceId = 7,
-): DecodedPacket {
+): Exclude<DecodedPacket, { messageType: 'HELLO' }> {
   return {
     messageType: 'FRAME',
     sourceId,
@@ -101,4 +101,25 @@ test('merges repeated runs with the same program name and allows manual deletion
   assert.equal(store.catalog(20.2).length, 0);
   assert.equal(store.memoryBytes(), 0);
   assert.equal(store.deleteSource(7), false);
+});
+
+test('manual channel deletion frees history, preserves siblings and allows rediscovery', () => {
+  const store = new TelemetryStore();
+  store.ingest(frame(0, 0, 10), 100);
+  store.ingest({ ...frame(1, 1, 20), items: [
+    { key: 'motor.speed', valueType: 'FLOAT64', value: 20 },
+    { key: 'motor.speed2', valueType: 'FLOAT64', value: 30 },
+  ] }, 101);
+  assert.equal(store.memoryBytes(), 48);
+  const id = store.catalog(101)[0].id;
+  store.deleteChannels(id, ['motor.speed', 'motor.speed', 'missing']);
+  assert.equal(store.memoryBytes(), 16);
+  assert.deepEqual(store.catalog(101)[0].channels.map(channel => channel.key), ['motor.speed2']);
+  assert.equal(store.snapshot(101).channels.length, 1);
+  store.ingest(frame(2, 2, 40), 102);
+  assert.equal(store.catalog(102)[0].channels.length, 2);
+  assert.deepEqual(store.snapshot(102).channels.find(channel => channel.key === 'motor.speed')?.samples.map(sample => sample[1]), [40]);
+  store.deleteChannels(id, ['motor.speed', 'motor.speed2']);
+  assert.equal(store.memoryBytes(), 0);
+  assert.equal(store.catalog(102).length, 1);
 });

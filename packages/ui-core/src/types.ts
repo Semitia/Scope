@@ -12,6 +12,7 @@ export interface ChannelDefinition {
   lineCurve: LineCurve;
   linePattern: LinePattern;
   lineWidth: number;
+  opacity?: number;
   unit: string;
   description: string;
   valueType?: string;
@@ -61,6 +62,7 @@ export interface TelemetryController {
   now: () => number;
   clear: () => void;
   deleteSource: (sourceId: number) => void;
+  deleteChannels: (sourceId: number, keys: string[]) => void;
   hubs: HubDefinition[];
   addHub: (address: string) => boolean;
   removeHub: (hubId: string) => void;

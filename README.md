@@ -8,6 +8,8 @@ The repository currently contains a working v0.1 preview: the Hub, polished brow
 C / C++ / Python / Rust / MATLAB SDK  →  UDP :4711  →  DebugScope Hub  →  Browser / VS Code
 ```
 
+A [3D wristed instrument panel](docs/wristed-instrument.md) visualizes live `l, phi, theta1, delta1, beta1, beta2, alpha` inputs with manual dimensions and interactive camera controls.
+
 ## Start
 
 Requirements: Node.js 24 LTS and npm.

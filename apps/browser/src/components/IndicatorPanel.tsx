@@ -1,5 +1,5 @@
 import { Plus, Trash2, X } from 'lucide-react';
-import { createPortal } from 'react-dom';
+import { FloatingPanel, panelAnchor } from './FloatingPanel';
 import type { ChannelDefinition } from '../types';
 import {
   DEFAULT_STATE_COLORS,
@@ -59,12 +59,9 @@ export function IndicatorPanel({
 
   return (
     <div className="indicator-stage">
-      {editingColors && createPortal((
-        <div
-          className="state-color-editor"
-          role="dialog"
-          aria-label={`State colors for ${panel.title}`}
-        >
+      {editingColors && (
+        <FloatingPanel className="state-color-editor" label={`State colors for ${panel.title}`} width={470}
+          anchor={() => panelAnchor(panel.id, '[data-color-editor-trigger]')} onClose={() => onEditingColorsChange(false)}>
           <div className="state-color-header">
             <span>VALUE</span><span>LABEL</span><span>COLOR</span><span />
           </div>
@@ -112,8 +109,8 @@ export function IndicatorPanel({
               <X size={12} /> Done
             </button>
           </div>
-        </div>
-      ), document.body)}
+        </FloatingPanel>
+      )}
 
       <div className="indicator-grid">
         {[...groups].map(([group, groupChannels]) => (

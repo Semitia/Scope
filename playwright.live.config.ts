@@ -4,6 +4,8 @@ export default defineConfig({
   testDir: './tests/e2e',
   outputDir: './artifacts/playwright-live',
   fullyParallel: false,
+  // These tests share the same Hub catalog and UDP ports.
+  workers: 1,
   retries: 0,
   reporter: 'line',
   use: {

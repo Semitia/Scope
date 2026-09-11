@@ -10,11 +10,12 @@ interface Group {
   children: Map<string, Group>;
 }
 
-export function ChannelGroupTree({ channels, collapsed, searching, onToggle, renderChannel }: {
+export function ChannelGroupTree({ channels, collapsed, searching, onToggle, renderChannel, renderActions }: {
   channels: ChannelDefinition[];
   collapsed: ReadonlySet<string>;
   searching: boolean;
   onToggle: (path: string) => void;
+  renderActions?: (path: string) => ReactNode;
   renderChannel: (channel: ChannelDefinition) => ReactNode;
 }) {
   const id = useId();
@@ -43,10 +44,10 @@ export function ChannelGroupTree({ channels, collapsed, searching, onToggle, ren
     const closed = !searching && collapsed.has(group.path);
     const contentId = `${id}-${encodeURIComponent(group.path)}`;
     return <div className={`channel-group${closed ? ' collapsed' : ''}`} key={group.path}>
-      <button className="group-label" type="button" onClick={() => onToggle(group.path)}
+      <div className="channel-group-heading"><button className="group-label" type="button" onClick={() => onToggle(group.path)}
         aria-label={`${group.path} channel group`} aria-expanded={!closed} aria-controls={contentId} title={group.path}>
         <ChevronDown size={14} aria-hidden="true" /><span>{group.name}</span><b>{group.count}</b>
-      </button>
+      </button>{renderActions?.(group.path)}</div>
       {!closed && <div id={contentId}>
         <div className="channel-list">{group.channels.map(renderChannel)}</div>
         <div className="channel-subgroups">{[...group.children.values()].map(renderGroup)}</div>

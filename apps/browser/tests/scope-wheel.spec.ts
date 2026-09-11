@@ -1,0 +1,30 @@
+import { expect, test } from '@playwright/test';
+
+test('ordinary wheel scrolls the workspace; Ctrl combinations zoom the scope', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 700 });
+  await page.goto('/?demo=1');
+  const overlay = page.locator('.u-over').first();
+  const workspace = page.locator('.workspace');
+  await overlay.hover({ position: { x: 200, y: 150 } });
+  await page.mouse.wheel(0, 180);
+  await expect.poll(() => workspace.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+  await expect(page.getByRole('button', { name: 'Return to live' })).toBeHidden();
+  await workspace.evaluate(element => { element.scrollTop = 0; });
+  await overlay.hover({ position: { x: 200, y: 150 } });
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -220);
+  await page.keyboard.up('Control');
+  await expect(page.getByRole('button', { name: 'Return to live' })).toBeVisible();
+  expect(await workspace.evaluate(element => element.scrollTop)).toBe(0);
+  await overlay.dblclick({ position: { x: 200, y: 150 } });
+  await page.getByLabel('Y axis mode for Scope 1').selectOption('manual');
+  await overlay.hover({ position: { x: 200, y: 150 } });
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -220);
+  await expect(page.getByRole('button', { name: 'Return to live' })).toBeHidden();
+  await page.keyboard.down('Shift');
+  await page.mouse.wheel(0, -220);
+  await page.keyboard.up('Shift');
+  await page.keyboard.up('Control');
+  await expect(page.getByRole('button', { name: 'Return to live' })).toBeVisible();
+});

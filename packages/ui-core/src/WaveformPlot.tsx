@@ -101,6 +101,7 @@ export function WaveformPlot({
   } | null>(null);
   const renderCounterRef = useRef({ count: 0, since: performance.now() });
   const lastMetricsAtRef = useRef(0);
+  const lastVisiblePointCountRef = useRef<number | null>(null);
   const yScaleRef = useRef<{ min: number; max: number } | null>(null);
   const fitManualYRef = useRef(false);
   const refreshViewRef = useRef<(liveEnd: number, forceMetrics?: boolean) => void>(() => {});
@@ -127,8 +128,13 @@ export function WaveformPlot({
       channel.lineCurve,
       channel.linePattern,
       channel.lineWidth,
+      channel.opacity ?? 1,
     ].join(':'))
     .join('|') + `:${theme}:${fontScale}`;
+
+  // Parents may create a new Set on every render. Only membership changes
+  // should refresh the plot, not the identity of that Set.
+  const visibilitySignature = JSON.stringify(channels.map(channel => visibleChannels.has(channel.id)));
 
   const setFollowing = (following: boolean) => {
     followingRef.current = following;
@@ -150,13 +156,13 @@ export function WaveformPlot({
       return;
     }
 
-    setHover({
-      left,
-      time,
-      values: channelsRef.current.map(
-        (_, channelIndex) => currentData[channelIndex + 1][index] ?? null,
-      ),
-    });
+    const values = channelsRef.current.map(
+      (_, channelIndex) => currentData[channelIndex + 1][index] ?? null,
+    );
+    setHover(current => current && current.left === left && current.time === time
+      && current.values.length === values.length
+      && current.values.every((value, valueIndex) => Object.is(value, values[valueIndex]))
+      ? current : { left, time, values });
   };
 
   const refreshView = (liveEnd: number, forceMetrics = false) => {
@@ -202,7 +208,11 @@ export function WaveformPlot({
       });
     }
 
-    onVisiblePointCountRef.current(visibleSamples * currentVisibleChannels.size);
+    const visiblePointCount = visibleSamples * currentVisibleChannels.size;
+    if (lastVisiblePointCountRef.current !== visiblePointCount) {
+      lastVisiblePointCountRef.current = visiblePointCount;
+      onVisiblePointCountRef.current(visiblePointCount);
+    }
     const currentYScaleMode = yScaleModeRef.current;
     const fitManualY = fitManualYRef.current;
     if ((currentYScaleMode !== 'manual' || fitManualY) && Number.isFinite(minY) && Number.isFinite(maxY)) {
@@ -236,9 +246,9 @@ export function WaveformPlot({
     const gridColor = dark ? '#1b2633' : '#dce4ed';
     const tickColor = dark ? '#2a394b' : '#c8d3df';
     const dashFor = (pattern: ChannelDefinition['linePattern']): number[] => {
-      if (pattern === 'dashed') return [10, 6];
-      if (pattern === 'dotted') return [2, 5];
-      if (pattern === 'dashdot') return [10, 5, 2, 5];
+      if (pattern === 'dashed') return [4, 10];
+      if (pattern === 'dotted') return [1, 9];
+      if (pattern === 'dashdot') return [5, 9, 1, 9];
       return [];
     };
     const pathsFor = (curve: ChannelDefinition['lineCurve']) => {
@@ -303,6 +313,7 @@ export function WaveformPlot({
         ...channels.map((channel) => ({
           label: channel.label,
           stroke: channel.color,
+          alpha: channel.opacity ?? 1,
           width: channel.lineWidth,
           dash: dashFor(channel.linePattern),
           cap: 'round' as CanvasLineCap,
@@ -358,6 +369,7 @@ export function WaveformPlot({
 
     const overlay = plot.over;
     const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
       event.preventDefault();
       if (yScaleModeRef.current === 'manual' && !event.shiftKey) {
         const minY = plot.scales.y.min;
@@ -509,11 +521,11 @@ export function WaveformPlot({
     const plot = plotRef.current;
     if (!plot) return;
 
-    plot.setData(data as AlignedData, false);
+    plot.setData(dataRef.current as AlignedData, false);
 
     let visibilityChanged = false;
-    channels.forEach((channel, index) => {
-      const show = visibleChannels.has(channel.id);
+    channelsRef.current.forEach((channel, index) => {
+      const show = visibleChannelsRef.current.has(channel.id);
       if (plot.series[index + 1].show === show) return;
       visibilityChanged = true;
       plot.setSeries(index + 1, { show });
@@ -532,17 +544,16 @@ export function WaveformPlot({
       else fitManualYRef.current = true;
     }
 
-    const liveEnd = pausedAt ?? getClockTime();
+    const liveEnd = pausedAt ?? getClockTimeRef.current();
     refreshViewRef.current(liveEnd, true);
   }, [
     yScaleMode,
-    channels,
+    channelSignature,
+    visibilitySignature,
     data,
     dataVersion,
-    getClockTime,
     pausedAt,
-    selectedChannel,
-    visibleChannels,
+    scrollWhenIdle,
     windowSeconds,
   ]);
 

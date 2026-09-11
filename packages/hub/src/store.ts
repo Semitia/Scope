@@ -192,6 +192,17 @@ export class TelemetryStore {
     this.totalPoints = 0;
   }
 
+  deleteChannels(sourceId: number, keys: string[]): void {
+    const source = this.sources.get(sourceId);
+    if (!source) return;
+    for (const key of keys) {
+      const channel = source.channels.get(key);
+      if (!channel) continue;
+      this.totalPoints -= channel.samples.length;
+      source.channels.delete(key);
+    }
+  }
+
   deleteSource(sourceId: number): boolean {
     const source = this.sources.get(sourceId);
     if (!source) return false;

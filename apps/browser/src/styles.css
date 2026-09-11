@@ -2334,20 +2334,20 @@ select:focus-visible,
 }
 
 .legend-line.dashed {
-  background: repeating-linear-gradient(90deg, var(--channel-color) 0 6px, transparent 6px 9px);
+  background: repeating-linear-gradient(90deg, var(--channel-color) 0 4px, transparent 4px 14px);
 }
 
 .legend-line.dotted {
-  background: repeating-linear-gradient(90deg, var(--channel-color) 0 2px, transparent 2px 5px);
+  background: repeating-linear-gradient(90deg, var(--channel-color) 0 1px, transparent 1px 10px);
 }
 
 .legend-line.dashdot {
   background: repeating-linear-gradient(
     90deg,
-    var(--channel-color) 0 7px,
-    transparent 7px 10px,
-    var(--channel-color) 10px 12px,
-    transparent 12px 15px
+    var(--channel-color) 0 5px,
+    transparent 5px 14px,
+    var(--channel-color) 14px 15px,
+    transparent 15px 24px
   );
 }
 
@@ -3387,4 +3387,139 @@ select:focus-visible,
 
 @media (max-width: 920px) {
   .scope-panel { width: 100% !important; margin-left: 0 !important; }
+}
+
+/* Instrument viewport stays mounted while configuring or receiving telemetry. */
+.wristed-stage { position: relative; flex: 1; min-height: 180px; overflow: hidden; background: #fff; color: #33485e; user-select: none; -webkit-user-select: none; }
+.wristed-viewport { position: absolute; inset: 0; }
+.wristed-viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; -webkit-user-drag: none; cursor: grab; }
+.wristed-viewport canvas:active { cursor: grabbing; }
+.wristed-topbar { position: absolute; top: 10px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; pointer-events: none; }
+.wristed-topbar > div { display: flex; gap: 5px; pointer-events: auto; }
+.wristed-stage button, .wristed-settings button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid #859db044; border-radius: 5px; padding: 5px 8px; color: inherit; background: #a4b6c01a; cursor: pointer; font-size: 11px; }
+.wristed-stage button:hover, .wristed-settings button:hover { background: #879cba33; }
+.wristed-status { font: 10px 'JetBrains Mono Variable', monospace; letter-spacing: .06em; }
+.wristed-status::before { content: ''; display: inline-block; width: 5px; height: 5px; background: #20ac89; border-radius: 50%; margin-right: 7px; }
+.wristed-status.waiting::before { background: #e99e3b; }
+.wristed-footer { position: absolute; bottom: 9px; left: 12px; right: 12px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; font-size: 10px; pointer-events: none; opacity: .8; }
+.wristed-footer code { font-size: 10px; }
+.wristed-footer i { font-style: normal; margin-left: 5px; }
+.axis-x { color: #ed6c64; }.axis-y { color: #40b971; }.axis-z { color: #539ce9; }
+.wristed-settings { position: absolute; top: 42px; right: 10px; bottom: 34px; width: min(360px, calc(100% - 20px)); padding: 12px; overflow: auto; border: 1px solid #859db044; border-radius: 8px; background: #f7fafdf5; box-shadow: 0 8px 28px #12253626; font-size: 11px; }
+[data-theme="dark"] .wristed-settings { background: #fff; }
+.wristed-settings input { user-select: text; -webkit-user-select: text; }
+.wristed-settings-heading, .wristed-units { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.wristed-settings p { opacity: .7; font-size: 10px; line-height: 1.5; margin: 6px 0 12px; }
+.wristed-pose-row { display: grid; grid-template-columns: 1fr 1.2fr; align-items: end; gap: 10px; margin-bottom: 8px; }
+.wristed-settings label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wristed-settings .wristed-units { flex-direction: row; }
+.wristed-settings input, .wristed-settings select { width: 100%; min-width: 0; background: #8b9fb215; color: inherit; border: 1px solid #859db055; border-radius: 4px; padding: 5px; font-size: 11px; }
+.wristed-settings option { color: #27384c; background: #f7fafd; }
+.wristed-settings input:disabled { opacity: .4; }
+.wristed-settings summary { padding: 10px 0; cursor: pointer; }
+.wristed-dimensions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.wristed-error { position: absolute; top: 45%; left: 10%; right: 10%; text-align: center; font-size: 12px; }
+.wristed-warning { position: absolute; top: 45px; left: 12px; right: 12px; color: #b98232; font-size: 11px; pointer-events: none; }
+
+
+/* Secondary editors live in document.body; their dimensions belong to the viewport. */
+.floating-panel {
+  position: fixed;
+  z-index: 80;
+  inset: auto;
+  margin: 0;
+  max-height: calc(100dvh - 24px);
+  box-sizing: border-box;
+  overscroll-behavior: contain;
+}
+.style-editor.floating-panel { overflow: auto; border-radius: 8px; }
+.wristed-settings.floating-panel { color: #33485e; background: #fff; bottom: auto; }
+.scope-channel-picker.floating-panel { max-height: min(600px, calc(100dvh - 24px)); }
+.scope-channel-picker.floating-panel .scope-picker-bulk,
+.scope-channel-picker.floating-panel .scope-picker-groups { flex-shrink: 0; }
+.scope-channel-picker.floating-panel .scope-picker-groups { max-height: 160px; overflow: auto; }
+@media (max-width: 500px) {
+  .state-color-editor.floating-panel .state-color-header,
+  .state-color-editor.floating-panel .state-color-row {
+    grid-template-columns: 50px minmax(60px, 1fr) 90px 24px;
+    gap: 4px;
+  }
+}
+/* Keep nested curve/stroke options inside the editor's scrollable content. */
+.style-editor.floating-panel .preview-select-menu {
+  position: static;
+  width: 100%;
+  margin-top: 5px;
+  box-sizing: border-box;
+}
+
+.channel-group-heading { display: flex; align-items: center; gap: 4px; }
+.channel-group-heading .group-label { flex: 1; min-width: 0; }
+.channel-group-actions { display: flex; gap: 2px; }
+.channel-group-actions > button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.channel-group-actions > button:hover { background: var(--bg-hover); color: var(--accent); }
+.channel-group-actions > button[aria-pressed="mixed"] { opacity: .55; }
+.channel-group-actions > button:disabled { opacity: .3; cursor: default; }
+.group-style-note { font-size: 12px; color: var(--text-muted); margin: 12px 0; }
+.channel-opacity { display: flex; align-items: center; gap: 10px; margin: 12px 0; font-size: 12px; }
+.channel-opacity input { min-width: 0; flex: 1; }
+
+/* Keep room to place the next panel; content growth carries this reserve along. */
+@media (min-width: 921px) {
+  .scope-grid { padding-bottom: max(280px, 45dvh); }
+}
+
+/* A collapsed header must not stretch to the grid's rounded row allocation. */
+.scope-panel.collapsed,
+.scope-panel.panel-indicators.collapsed {
+  height: 28px;
+  min-height: 28px;
+  align-self: start;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+@media (max-width: 920px) {
+  .scope-grid { width: 100% !important; }
+}
+
+/* Shallow docked surfaces: neutral chrome and a narrow recessed seam. */
+.app-shell[data-visual-style="compact"][data-panel-depth="true"] {
+  --dock-header: #f4f5f6;
+  --dock-sidebar: #f6f7f8;
+  --dock-divider: #d9dcdf;
+  --dock-shade: rgba(28, 34, 40, 0.08);
+  --dock-highlight: rgba(255, 255, 255, 0.8);
+}
+:root[data-theme="dark"] .app-shell[data-visual-style="compact"][data-panel-depth="true"] {
+  --dock-header: #191e25;
+  --dock-sidebar: #151a21;
+  --dock-divider: #30363e;
+  --dock-shade: rgba(0, 0, 0, 0.28);
+  --dock-highlight: rgba(255, 255, 255, 0.035);
+}
+.app-shell[data-visual-style="compact"][data-panel-depth="true"] .scope-panel {
+  border-color: var(--dock-divider);
+}
+.app-shell[data-visual-style="compact"][data-panel-depth="true"] .scope-panel > .plot-legend {
+  background: var(--dock-header);
+  border-bottom-color: var(--dock-divider);
+  box-shadow: inset 0 1px var(--dock-highlight), 0 1px 3px var(--dock-shade);
+  z-index: 1;
+}
+.app-shell[data-visual-style="compact"][data-panel-depth="true"] .scope-panel.active > .plot-legend {
+  box-shadow: inset 0 2px var(--accent), 0 1px 3px var(--dock-shade);
+}
+.app-shell[data-visual-style="compact"][data-panel-depth="true"] .panel-sources,
+.app-shell[data-visual-style="compact"][data-panel-depth="true"] .sources-panel-content {
+  background: var(--dock-sidebar);
+}
+.app-shell[data-visual-style="compact"][data-panel-depth="true"] .scope-panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  box-shadow: inset -3px 0 3px -3px var(--dock-shade),
+    inset 0 -3px 3px -3px var(--dock-shade),
+    inset 1px 0 var(--dock-highlight);
 }

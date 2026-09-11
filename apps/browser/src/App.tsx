@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { PreviewSelect, CURVE_OPTIONS, PATTERN_OPTIONS } from './components/PreviewSelect';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   ChevronDown,
@@ -27,7 +28,10 @@ import {
   X,
 } from 'lucide-react';
 import { WaveformPlot } from './components/WaveformPlot';
+import { FloatingPanel, panelAnchor } from './components/FloatingPanel';
 import { IndicatorPanel } from './components/IndicatorPanel';
+import { DEFAULT_WRISTED, parseWristedSettings } from './wristed/config';
+import { ChannelGroupActions } from './components/ChannelGroupActions';
 import { ChannelGroupTree } from './components/ChannelGroupTree';
 import { ValueBarPanel } from './components/ValueBarPanel';
 import { createDragDiagnostics } from './dragDiagnostics';
@@ -50,7 +54,10 @@ import type {
   YScaleMode,
 } from './types';
 
+const WristedInstrumentPanel = lazy(() => import('./components/WristedInstrumentPanel'));
+
 interface StoredChannelStyle {
+  opacity?: number;
   color: string;
   lineCurve: LineCurve;
   linePattern: LinePattern;
@@ -66,6 +73,7 @@ const COLLAPSED_PANELS_KEY = 'debugscope.collapsed-panels.v1';
 const MAX_PANELS = 9;
 const WORKSPACE_TEMPLATE_KEY = '__debugscope_workspace_template__';
 const GRID_COLUMNS = 12;
+const MAX_CANVAS_COLUMNS = 1200;
 const GRID_ROW_HEIGHT = 84;
 const LAYOUT_GRID_STEP = 0.25;
 const EDGE_SNAP_PX = 10;
@@ -87,6 +95,7 @@ interface UserSettings {
   scrollWhenIdle: boolean;
   fontScale: number;
   visualStyle: 'compact' | 'cards';
+  panelDepth: boolean;
   programsCollapsed: boolean;
   channelsCollapsed: boolean;
 }
@@ -103,6 +112,8 @@ interface LayoutInteraction {
   expandedPanels: PanelDefinition[];
   workspaceWidth: number;
   workspaceHeight: number;
+  scrollTop: number;
+  scrollLeft: number;
 }
 
 interface WorkspaceConfigFile {
@@ -122,19 +133,6 @@ const NUMBER_FORMAT = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 1,
   maximumFractionDigits: 1,
 });
-
-const CURVE_OPTIONS: ReadonlyArray<{ value: LineCurve; label: string }> = [
-  { value: 'linear', label: 'Linear' },
-  { value: 'smooth', label: 'Smooth' },
-  { value: 'stepped', label: 'Stepped' },
-];
-
-const PATTERN_OPTIONS: ReadonlyArray<{ value: LinePattern; label: string }> = [
-  { value: 'solid', label: 'Solid' },
-  { value: 'dashed', label: 'Dashed' },
-  { value: 'dotted', label: 'Dotted' },
-  { value: 'dashdot', label: 'Dash-dot' },
-];
 
 const Y_SCALE_OPTIONS: ReadonlyArray<{
   value: YScaleMode;
@@ -159,14 +157,9 @@ const Y_SCALE_OPTIONS: ReadonlyArray<{
   {
     value: 'manual',
     label: 'Manual',
-    title: 'Manual Y: wheel to zoom Y · drag to pan · Shift+wheel to zoom X · double-click to fit data',
+    title: 'Manual Y: Ctrl+wheel to zoom Y · drag to pan · Ctrl+Shift+wheel to zoom X · double-click to fit data',
   },
 ];
-
-interface StylePreviewProps {
-  kind: 'curve' | 'pattern';
-  value: LineCurve | LinePattern;
-}
 
 interface TimeWindowControlProps {
   panel: ScopePanelDefinition;
@@ -263,136 +256,6 @@ function TimeWindowControl({
   );
 }
 
-function StylePreview({ kind, value }: StylePreviewProps) {
-  if (kind === 'pattern') {
-    const dashArray = value === 'dashed'
-      ? '9 5'
-      : value === 'dotted'
-        ? '1 4'
-        : value === 'dashdot'
-          ? '9 4 1 4'
-          : undefined;
-
-    return (
-      <svg className="style-preview" viewBox="0 0 44 14" aria-hidden="true">
-        <line
-          x1="2"
-          y1="7"
-          x2="42"
-          y2="7"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeDasharray={dashArray}
-          strokeLinecap="round"
-        />
-      </svg>
-    );
-  }
-
-  const path = value === 'smooth'
-    ? 'M2 11 C9 2 16 1 23 7 S35 12 42 3'
-    : value === 'stepped'
-      ? 'M2 11 H13 V3 H27 V9 H42'
-      : 'M2 11 L13 3 L27 9 L42 3';
-
-  return (
-    <svg className="style-preview" viewBox="0 0 44 14" aria-hidden="true">
-      <path
-        d={path}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-interface PreviewSelectProps<T extends string> {
-  ariaLabel: string;
-  color: string;
-  kind: 'curve' | 'pattern';
-  options: ReadonlyArray<{ value: T; label: string }>;
-  value: T;
-  onChange: (value: T) => void;
-}
-
-function PreviewSelect<T extends string>({
-  ariaLabel,
-  color,
-  kind,
-  options,
-  value,
-  onChange,
-}: PreviewSelectProps<T>) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const selected = options.find((option) => option.value === value) ?? options[0];
-
-  useEffect(() => {
-    if (!open) return;
-
-    const closeOutside = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-
-    document.addEventListener('pointerdown', closeOutside);
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('pointerdown', closeOutside);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [open]);
-
-  return (
-    <div
-      className={`preview-select${open ? ' open' : ''}`}
-      ref={rootRef}
-      style={{ '--preview-color': color } as React.CSSProperties}
-    >
-      <button
-        className="preview-select-button"
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-      >
-        <span className="preview-select-value">
-          <StylePreview kind={kind} value={value as LineCurve | LinePattern} />
-          <span>{selected?.label}</span>
-        </span>
-        <ChevronDown size={12} />
-      </button>
-
-      {open && (
-        <div className="preview-select-menu" role="listbox" aria-label={`${ariaLabel} options`}>
-          {options.map((option) => (
-            <button
-              className="preview-select-option"
-              type="button"
-              role="option"
-              aria-selected={option.value === value}
-              key={option.value}
-              onClick={() => {
-                onChange(option.value);
-                setOpen(false);
-              }}
-            >
-              <StylePreview kind={kind} value={option.value as LineCurve | LinePattern} />
-              <span>{option.label}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function formatValue(value: number): string {
   return NUMBER_FORMAT.format(value);
 }
@@ -426,11 +289,12 @@ function initialSettings(): UserSettings {
       : 1;
     return { scrollWhenIdle: stored.scrollWhenIdle === true, fontScale,
       visualStyle: stored.visualStyle === 'cards' ? 'cards' : 'compact',
+      panelDepth: stored.panelDepth === true,
       programsCollapsed: stored.programsCollapsed === true,
       channelsCollapsed: stored.channelsCollapsed === true };
   } catch {
     return { scrollWhenIdle: false, fontScale: 1,
-      visualStyle: 'compact', programsCollapsed: false, channelsCollapsed: false };
+      visualStyle: 'compact', panelDepth: false, programsCollapsed: false, channelsCollapsed: false };
   }
 }
 
@@ -478,9 +342,9 @@ function panelMinimumSize(type: PanelType): { width: number; height: number } {
 // Quarter columns remain aligned when the workspace changes width.
 function alignPanelEdges(layout: PanelGridLayout, minimum: { width: number; height: number }): PanelGridLayout {
   const snap = (value: number) => snapLayoutValue(value, LAYOUT_GRID_STEP);
-  const x = Math.max(0, Math.min(GRID_COLUMNS - minimum.width, snap(layout.x)));
+  const x = Math.max(0, Math.min(MAX_CANVAS_COLUMNS - minimum.width, snap(layout.x)));
   const y = Math.max(0, snap(layout.y));
-  const right = Math.min(GRID_COLUMNS, Math.max(x + minimum.width, snap(layout.x + layout.width)));
+  const right = Math.min(MAX_CANVAS_COLUMNS, Math.max(x + minimum.width, snap(layout.x + layout.width)));
   const bottom = Math.max(y + minimum.height, snap(layout.y + layout.height));
   return { x, y, width: right - x, height: bottom - y };
 }
@@ -498,8 +362,8 @@ function normalizePanelLayout(
       ? candidate[key]
       : defaultValue
   );
-  const width = Math.max(minimum.width, Math.min(GRID_COLUMNS, number('width', fallback.width)));
-  const x = Math.max(0, Math.min(GRID_COLUMNS - width, number('x', fallback.x)));
+  const width = Math.max(minimum.width, Math.min(MAX_CANVAS_COLUMNS, number('width', fallback.width)));
+  const x = Math.max(0, Math.min(MAX_CANVAS_COLUMNS - width, number('x', fallback.x)));
   return alignPanelEdges({
     x,
     y: Math.max(0, number('y', fallback.y)),
@@ -520,8 +384,8 @@ function isWorkspacePanelLayout(value: unknown, type: PanelType): value is Panel
   return x >= 0
     && y >= 0
     && width >= minimum.width
-    && width <= GRID_COLUMNS
-    && x + width <= GRID_COLUMNS + 1e-7
+    && width <= MAX_CANVAS_COLUMNS
+    && x + width <= MAX_CANVAS_COLUMNS + 1e-7
     && height >= minimum.height
     && y <= 100_000
     && height <= 10_000;
@@ -699,6 +563,7 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
     const validType = panel.type === 'scope'
       || panel.type === 'value-bar'
       || panel.type === 'indicators'
+      || panel.type === 'wristed'
       || panel.type === 'sources';
     const validIdentity = typeof panel.id === 'string'
       && panel.id.length > 0
@@ -740,6 +605,11 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
         continue;
       }
       panels.push({ ...base, type: 'sources' });
+      continue;
+    }
+    if (panel.type === 'wristed') {
+      const wristed = parseWristedSettings(panel.wristed, strict);
+      panels.push({ ...base, type: 'wristed', wristed, channelKeys: [...new Set(wristed.bindings.filter(Boolean))] });
       continue;
     }
     if (panel.type === 'value-bar') {
@@ -915,7 +785,7 @@ function createScopeId(): string {
 }
 
 function nextPanelTitle(panels: PanelDefinition[], type: PanelType): string {
-  const base = type === 'scope' ? 'Scope' : type === 'value-bar' ? 'Value Bars' : 'Indicators';
+  const base = type === 'wristed' ? 'Wristed Instrument' : type === 'scope' ? 'Scope' : type === 'value-bar' ? 'Value Bars' : 'Indicators';
   const titles = new Set(panels.map((panel) => panel.title));
   let number = 1;
   while (titles.has(`${base} ${number}`)) number += 1;
@@ -926,6 +796,7 @@ function effectivePanelChannelKeys(
   panel: PanelDefinition | undefined,
   channels: ChannelDefinition[],
 ): string[] {
+  if (panel?.type === 'wristed') return panel.wristed.bindings.filter(Boolean);
   if (!panel || panel.type === 'scope' || panel.type === 'sources' || !panel.channelGroup) return panel?.channelKeys ?? [];
   const prefix = `${panel.channelGroup}.`;
   return channels
@@ -975,6 +846,14 @@ export default function App() {
   const [visiblePointCounts, setVisiblePointCounts] = useState<Record<string, number>>({});
   const [renderRates, setRenderRates] = useState<Record<string, number>>({});
   const gridRef = useRef<HTMLDivElement>(null);
+  const [workspaceViewportWidth, setWorkspaceViewportWidth] = useState(window.innerWidth);
+  useLayoutEffect(() => {
+    const workspace = gridRef.current?.parentElement;
+    if (!workspace) return;
+    const observer = new ResizeObserver(([entry]) => setWorkspaceViewportWidth(entry.contentRect.width));
+    observer.observe(workspace);
+    return () => observer.disconnect();
+  }, []);
   const layoutPreviewRef = useRef<PanelDefinition[] | null>(null);
   const dragDiagnosticsRef = useRef<ReturnType<typeof createDragDiagnostics>>(null);
   const panelRectsBeforeReflowRef = useRef<Map<string, DOMRect> | null>(null);
@@ -1360,10 +1239,12 @@ export default function App() {
       origin: { ...panel.layout },
       panels: displayedPanels,
       expandedPanels: scopePanels,
-      workspaceWidth: grid.getBoundingClientRect().width,
+      workspaceWidth: workspaceViewportWidth,
       workspaceHeight: grid.getBoundingClientRect().height,
+      scrollTop: grid.parentElement?.scrollTop ?? 0,
+      scrollLeft: grid.parentElement?.scrollLeft ?? 0,
     });
-  }, [displayedPanels, scopePanels]);
+  }, [displayedPanels, scopePanels, workspaceViewportWidth]);
 
   useEffect(() => {
     if (!layoutInteraction) return;
@@ -1377,6 +1258,9 @@ export default function App() {
       devicePixelRatio: window.devicePixelRatio });
     dragDiagnosticsRef.current = diagnostics;
 
+    const workspace = gridRef.current?.parentElement;
+    let finished = false;
+    let scrollFrame: number | null = null;
     let frame: number | null = null;
     let latestPointer: { clientX: number; clientY: number } | null = null;
     let previewTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1420,7 +1304,7 @@ export default function App() {
         const scale = axis === 'x' ? columnStep : GRID_ROW_HEIGHT;
         const property = resizing ? (axis === 'x' ? 'width' : 'height') : axis;
         const min = resizing ? (axis === 'x' ? minimum.width : minimum.height) : 0;
-        const max = resizing ? GRID_COLUMNS - layout.x : GRID_COLUMNS - layout.width;
+        const max = resizing ? MAX_CANVAS_COLUMNS - layout.x : MAX_CANVAS_COLUMNS - layout.width;
         const candidates = targets[axis].filter((value) => value >= min
           && (axis !== 'x' || value <= max));
         const locked = edgeLocks[axis];
@@ -1455,8 +1339,10 @@ export default function App() {
       const calculationStart = diagnostics ? performance.now() : 0;
       const previousLocks = diagnostics ? { ...edgeLocks } : null;
       const columnStep = layoutInteraction.workspaceWidth / GRID_COLUMNS;
-      const offsetX = event.clientX - layoutInteraction.startX;
-      const offsetY = event.clientY - layoutInteraction.startY;
+      const offsetX = event.clientX - layoutInteraction.startX
+        + (workspace?.scrollLeft ?? 0) - layoutInteraction.scrollLeft;
+      const offsetY = event.clientY - layoutInteraction.startY
+        + (workspace?.scrollTop ?? 0) - layoutInteraction.scrollTop;
       const deltaColumns = offsetX / columnStep;
       const deltaRows = offsetY / GRID_ROW_HEIGHT;
       const origin = layoutInteraction.origin;
@@ -1467,14 +1353,14 @@ export default function App() {
       let next = layoutInteraction.kind === 'move'
         ? {
           ...origin,
-          x: Math.max(0, Math.min(GRID_COLUMNS - origin.width, origin.x + deltaColumns)),
+          x: Math.max(0, Math.min(MAX_CANVAS_COLUMNS - origin.width, origin.x + deltaColumns)),
           y: Math.max(0, origin.y + deltaRows),
         }
         : {
           ...origin,
           width: Math.max(
             minimum.width,
-            Math.min(GRID_COLUMNS - origin.x, origin.width + deltaColumns),
+            Math.min(MAX_CANVAS_COLUMNS - origin.x, origin.width + deltaColumns),
           ),
           height: Math.max(minimum.height, origin.height + deltaRows),
         };
@@ -1483,7 +1369,7 @@ export default function App() {
         // must not turn a safe edge placement into a collision.
         const edgeLayout = snapPanelEdges({
           ...origin,
-          x: Math.max(0, Math.min(GRID_COLUMNS - origin.width, origin.x + offsetX / columnStep)),
+          x: Math.max(0, Math.min(MAX_CANVAS_COLUMNS - origin.width, origin.x + offsetX / columnStep)),
           y: Math.max(0, origin.y + offsetY / GRID_ROW_HEIGHT),
         });
         next = {
@@ -1494,7 +1380,7 @@ export default function App() {
       } else {
         const edgeLayout = snapPanelEdges({
           ...origin,
-          width: Math.max(minimum.width, Math.min(GRID_COLUMNS - origin.x, origin.width + offsetX / columnStep)),
+          width: Math.max(minimum.width, Math.min(MAX_CANVAS_COLUMNS - origin.x, origin.width + offsetX / columnStep)),
           height: Math.max(minimum.height, origin.height + offsetY / GRID_ROW_HEIGHT),
         });
         next = { ...next,
@@ -1539,17 +1425,58 @@ export default function App() {
       publishPreview();
     };
 
-    const move = (event: PointerEvent) => {
-      diagnostics?.pointer(event, frame !== null);
-      latestPointer = { clientX: event.clientX, clientY: event.clientY };
-      if (frame !== null) return;
+    const queuePreview = () => {
+      if (finished || frame !== null) return;
       frame = requestAnimationFrame(() => {
         frame = null;
         if (latestPointer) previewAt(latestPointer, false);
       });
     };
 
+    const move = (event: PointerEvent) => {
+      diagnostics?.pointer(event, frame !== null);
+      latestPointer = { clientX: event.clientX, clientY: event.clientY };
+      queuePreview();
+    };
+    let lastScrollTime = performance.now();
+    const autoScroll = (time: number) => {
+      if (finished) return;
+      const elapsed = Math.min(32, time - lastScrollTime);
+      lastScrollTime = time;
+      if (workspace && latestPointer) {
+        const rect = workspace.getBoundingClientRect();
+        const edge = Math.min(64, rect.height / 4);
+        const y = latestPointer.clientY;
+        const insideX = latestPointer.clientX >= rect.left && latestPointer.clientX <= rect.right;
+        const speed = !insideX ? 0 : y < rect.top + edge
+          ? -Math.min(1, (rect.top + edge - y) / edge)
+          : y > rect.bottom - edge ? Math.min(1, (y - rect.bottom + edge) / edge) : 0;
+        if (speed) {
+          const before = workspace.scrollTop;
+          workspace.scrollTop += speed * elapsed * 0.75;
+          if (workspace.scrollTop !== before) queuePreview();
+        }
+        const x = latestPointer.clientX;
+        const horizontalEdge = Math.min(64, rect.width / 4);
+        const insideY = y >= rect.top && y <= rect.bottom;
+        const horizontalSpeed = !insideY ? 0 : x < rect.left + horizontalEdge
+          ? -Math.min(1, (rect.left + horizontalEdge - x) / horizontalEdge)
+          : x > rect.right - horizontalEdge ? Math.min(1, (x - rect.right + horizontalEdge) / horizontalEdge) : 0;
+        if (horizontalSpeed) {
+          const before = workspace.scrollLeft;
+          workspace.scrollLeft += horizontalSpeed * elapsed * 0.75;
+          if (workspace.scrollLeft !== before) queuePreview();
+        }
+      }
+      scrollFrame = requestAnimationFrame(autoScroll);
+    };
+    scrollFrame = requestAnimationFrame(autoScroll);
+    workspace?.addEventListener('scroll', queuePreview);
+
     const finish = (commit: boolean) => {
+      if (finished) return;
+      finished = true;
+      if (scrollFrame !== null) cancelAnimationFrame(scrollFrame);
       clearPreviewTimer();
       if (frame !== null) cancelAnimationFrame(frame);
       frame = null;
@@ -1572,8 +1499,12 @@ export default function App() {
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', pointerUp, { once: true });
     window.addEventListener('pointercancel', pointerCancel, { once: true });
+    window.addEventListener('blur', pointerCancel);
     window.addEventListener('keydown', keyDown);
     return () => {
+      finished = true;
+      if (scrollFrame !== null) cancelAnimationFrame(scrollFrame);
+      workspace?.removeEventListener('scroll', queuePreview);
       diagnostics?.finish('effect-cleanup');
       if (dragDiagnosticsRef.current === diagnostics) dragDiagnosticsRef.current = null;
       clearPreviewTimer();
@@ -1583,6 +1514,7 @@ export default function App() {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', pointerUp);
       window.removeEventListener('pointercancel', pointerCancel);
+      window.removeEventListener('blur', pointerCancel);
       window.removeEventListener('keydown', keyDown);
     };
   }, [layoutInteraction, updateScopePanels, collapsedPanelIds, capturePanelRectsBeforeReflow]);
@@ -1632,7 +1564,7 @@ export default function App() {
 
   const toggleScopeChannel = useCallback((scopeId: string, channelKey: string) => {
     updateScopePanels((panels) => panels.map((panel) => {
-      if (panel.id !== scopeId) return panel;
+      if (panel.id !== scopeId || panel.type === 'wristed') return panel;
       const channelKeys = new Set(effectivePanelChannelKeys(panel, channels));
       if (channelKeys.has(channelKey)) channelKeys.delete(channelKey);
       else channelKeys.add(channelKey);
@@ -1656,7 +1588,9 @@ export default function App() {
       channelKeys: [],
       layout: { x: 0, y: nextRow, width: GRID_COLUMNS, height: type === 'indicators' ? 1 : 4 },
     };
-    const panel: PanelDefinition = type === 'value-bar'
+    const panel: PanelDefinition = type === 'wristed'
+      ? { ...base, type, layout: { ...base.layout, height: 6 }, wristed: structuredClone(DEFAULT_WRISTED) }
+      : type === 'value-bar'
       ? {
         ...base,
         type,
@@ -1670,7 +1604,7 @@ export default function App() {
         : { ...base, type, yScaleMode: 'fit', windowMode: 'auto', windowSeconds: 10 };
     updateScopePanels((panels) => [...panels, panel]);
     setActiveScopeId(panel.id);
-    setChannelPickerScopeId(panel.id);
+    setChannelPickerScopeId(type === 'wristed' ? null : panel.id);
     setAddPanelMenuOpen(false);
   };
 
@@ -1789,6 +1723,7 @@ export default function App() {
         lineCurve: channel.lineCurve,
         linePattern: channel.linePattern,
         lineWidth: channel.lineWidth,
+        opacity: channel.opacity ?? 1,
       }, current[key], patch),
     }));
   };
@@ -1832,6 +1767,7 @@ export default function App() {
     <div
       className="app-shell"
       data-visual-style={settings.visualStyle}
+      data-panel-depth={settings.panelDepth}
       style={{ '--panel-gap': `${gridGap}px` } as React.CSSProperties}
     >
       <header className="app-bar">
@@ -1894,6 +1830,10 @@ export default function App() {
                     <Gauge size={15} />
                     <span><strong>Value bars</strong><small>Values within a range</small></span>
                   </button>
+                  <button type="button" role="menuitem" onClick={() => addPanel('wristed')}>
+                    <Activity size={15} />
+                    <span><strong>Wristed instrument</strong><small>Live 3D instrument pose</small></span>
+                  </button>
                   <button type="button" role="menuitem" onClick={() => addPanel('indicators')}>
                     <Radio size={15} />
                     <span><strong>Indicators</strong><small>Boolean and enum states</small></span>
@@ -1947,7 +1887,11 @@ export default function App() {
         <div
           className="scope-grid"
           ref={gridRef}
-          style={layoutInteraction ? { minHeight: layoutInteraction.workspaceHeight } : undefined}
+          style={{
+            minHeight: layoutInteraction?.workspaceHeight,
+            width: Math.max(GRID_COLUMNS, ...displayedPanels.map(({ layout }) => layout.x + layout.width))
+              * workspaceViewportWidth / GRID_COLUMNS + Math.max(280, workspaceViewportWidth * 0.45),
+          }}
         >
           {displayedPanels.map((panel) => {
             const panelChannelKeys = new Set(effectivePanelChannelKeys(panel, channels));
@@ -1975,8 +1919,8 @@ export default function App() {
                 data-grid-height={panel.layout.height}
                 style={{
                   gridColumn: '1 / -1',
-                  width: `calc(${panel.layout.width / GRID_COLUMNS * 100}% - ${gridGap}px)`,
-                  marginLeft: `${panel.layout.x / GRID_COLUMNS * 100}%`,
+                  width: panel.layout.width / GRID_COLUMNS * workspaceViewportWidth - gridGap,
+                  marginLeft: panel.layout.x / GRID_COLUMNS * workspaceViewportWidth,
                   gridRow: `${Math.round(panel.layout.y * GRID_ROW_HEIGHT) + 1} / span ${Math.round(panel.layout.height * GRID_ROW_HEIGHT)}`,
                 }}
               >
@@ -2121,7 +2065,7 @@ export default function App() {
                         <Palette size={13} />
                       </button>
                     )}
-                    {!panelCollapsed && panel.type !== 'sources' && <button
+                    {!panelCollapsed && panel.type !== 'sources' && panel.type !== 'wristed' && <button
                       className={`scope-action${pickerOpen ? ' active' : ''}`}
                       type="button"
                       onClick={() => setChannelPickerScopeId((current) => current === panel.id ? null : panel.id)}
@@ -2330,6 +2274,30 @@ export default function App() {
 
                       <ChannelGroupTree channels={filteredChannels} collapsed={collapsedGroupsForSource}
                         searching={Boolean(channelSearch.trim())} onToggle={toggleChannelGroup}
+                        renderActions={(path) => {
+                          const members = channels.filter((channel) => channel.key.startsWith(`${path}.`)
+                            || (path === 'signals' && !channel.key.includes('.')));
+                          return <ChannelGroupActions path={path} channels={members} visibleIds={activeScopeChannelIds}
+                            disabled={!activeScope || activeScope.type === 'wristed'}
+                            onVisibility={(show) => {
+                              if (!activeScope) return;
+                              const keys = new Set(effectivePanelChannelKeys(activeScope, channels));
+                              for (const channel of members) { if (show) keys.add(channel.key); else keys.delete(channel.key); }
+                              setScopeChannelKeys(activeScope.id, [...keys]);
+                            }}
+                            onStyle={(patch) => setChannelStyles((current) => {
+                              const next = { ...current };
+                              for (const channel of members) next[styleKeyFor(channel)] = {
+                                color: channel.color, lineCurve: channel.lineCurve, linePattern: channel.linePattern,
+                                lineWidth: channel.lineWidth, opacity: channel.opacity ?? 1,
+                                ...patch,
+                              };
+                              return next;
+                            })}
+                            onDelete={telemetry.mode === 'live' ? () => {
+                              if (members.length) telemetry.deleteChannels(members[0].sourceId, members.map((channel) => channel.key));
+                            } : undefined} />;
+                        }}
                         renderChannel={(channel) => {
                               const channelIndex = channelIndexes.get(channel.id) ?? -1;
                               const visible = activeScopeChannelIds.has(channel.id);
@@ -2350,6 +2318,8 @@ export default function App() {
                                   <button
                                     className="visibility-button"
                                     type="button"
+                                    disabled={activeScope?.type === 'wristed'}
+                                    title={activeScope?.type === 'wristed' ? 'Bind pose inputs using Configure in the instrument panel' : undefined}
                                     onClick={(event) => {
                                       event.stopPropagation();
                                       if (activeScope) toggleScopeChannel(activeScope.id, channel.key);
@@ -2392,7 +2362,8 @@ export default function App() {
                       )}
 
                       {styleEditorChannel && (
-                        <div className="style-editor" role="dialog" aria-label={`Style ${styleEditorChannel.label}`}>
+                        <FloatingPanel className="style-editor" label={`Style ${styleEditorChannel.label}`} width={360}
+                          anchor={() => panelAnchor(panel.id, '.style-button.active')} onClose={() => setStyleEditorChannelId(null)}>
                           <div className="style-editor-header">
                             <span><Palette size={13} /> Signal style</span>
                             <button type="button" onClick={() => setStyleEditorChannelId(null)} aria-label="Close style editor">
@@ -2455,6 +2426,16 @@ export default function App() {
                               </select>
                             </label>
                           </div>
+                          <label className="channel-opacity"><span>Opacity</span>
+                            <input type="range" min="0.1" max="1" step="0.05" value={styleEditorChannel.opacity ?? 1}
+                              aria-label={`Opacity for ${styleEditorChannel.label}`}
+                              onChange={(event) => updateChannelStyle(styleEditorChannel, { opacity: Number(event.target.value) })} />
+                            <output>{Math.round((styleEditorChannel.opacity ?? 1) * 100)}%</output>
+                          </label>
+                          {telemetry.mode === 'live' && <button className="reset-style" onClick={() => {
+                            telemetry.deleteChannels(styleEditorChannel.sourceId, [styleEditorChannel.key]);
+                            setStyleEditorChannelId(null);
+                          }}><Trash2 size={12} /> Delete channel and history</button>}
                           <button
                             className="reset-style"
                             type="button"
@@ -2462,7 +2443,7 @@ export default function App() {
                           >
                             <RotateCcw size={12} /> Reset default
                           </button>
-                        </div>
+                        </FloatingPanel>
                       )}
                       </div>
                       )}
@@ -2503,6 +2484,12 @@ export default function App() {
                     showEmptyAction={channels.length > 0}
                   />
                 )}
+                {!panelCollapsed && panel.type === 'wristed' && (
+                  <Suspense fallback={<div className="instrument-empty">Loading 3D view…</div>}>
+                    <WristedInstrumentPanel panel={panel} channels={channels} latest={telemetry.latest}
+                      channelIndexes={channelIndexes} paused={paused} onChange={(patch) => updatePanel(panel.id, patch)} />
+                  </Suspense>
+                )}
                 {!panelCollapsed && panel.type === 'value-bar' && (
                   <ValueBarPanel
                     panel={{ ...panel, channelKeys: [...panelChannelKeys] }}
@@ -2526,14 +2513,9 @@ export default function App() {
                 )}
 
                 {pickerOpen && (
-                  <>
-                    <button
-                      className="scope-picker-scrim"
-                      type="button"
-                      onClick={() => setChannelPickerScopeId(null)}
-                      aria-label={`Close channel picker for ${panel.title}`}
-                    />
-                    <div className="scope-channel-picker" role="dialog" aria-label={`Channels for ${panel.title}`}>
+                    <FloatingPanel className="scope-channel-picker" label={`Channels for ${panel.title}`} width={420}
+                      anchor={() => panelAnchor(panel.id, '[data-channel-picker-trigger]')}
+                      onClose={() => setChannelPickerScopeId(null)}>
                       <div className="scope-picker-header">
                         <span>
                           <strong>{panel.title}</strong>
@@ -2568,7 +2550,7 @@ export default function App() {
                         </button>
                       </div>
 
-                      {panel.type !== 'scope' && panel.type !== 'sources' && numberedChannelGroups.length > 0 && (
+                      {panel.type !== 'scope' && panel.type !== 'sources' && panel.type !== 'wristed' && numberedChannelGroups.length > 0 && (
                         <div className="scope-picker-groups">
                           <span>NUMBERED GROUPS</span>
                           <div>
@@ -2618,8 +2600,7 @@ export default function App() {
                           <span className="scope-picker-empty">Channels will appear after the first sample.</span>
                         )}
                       </div>
-                    </div>
-                  </>
+                    </FloatingPanel>
                 )}
                 {!panelCollapsed && <button
                   className="panel-resize-handle"
@@ -2702,6 +2683,17 @@ export default function App() {
                   <option value="compact">Compact</option>
                   <option value="cards">Cards</option>
                 </select>
+              </div>
+              <div className="settings-entry">
+                <span className="settings-entry-copy">
+                  <strong>Panel depth</strong>
+                  <small>Subtle shadows and gray headers in Compact style.</small>
+                </span>
+                <button type="button" role="switch" aria-label="Panel depth" aria-checked={settings.panelDepth}
+                  className={`settings-switch${settings.panelDepth ? ' enabled' : ''}`}
+                  onClick={() => setSettings((current) => ({ ...current, panelDepth: !current.panelDepth }))}>
+                  <span />
+                </button>
               </div>
               <div className="settings-entry font-size-setting">
                 <span className="settings-entry-copy">

@@ -175,7 +175,7 @@ export class DebugScopeHub {
 
   private handleClientMessage(client: WebSocket, rawMessage: string): void {
     try {
-      const message = JSON.parse(rawMessage) as { type?: string; sourceId?: number };
+      const message = JSON.parse(rawMessage) as { type?: string; sourceId?: number; keys?: unknown };
       if (message.type === 'clear') {
         this.store.clear();
         this.pendingBatches.clear();
@@ -186,6 +186,12 @@ export class DebugScopeHub {
           ...this.store.snapshot(nowSeconds()),
           stats: this.stats(),
         });
+      } else if (message.type === 'deleteChannels' && Number.isInteger(message.sourceId)
+        && message.sourceId !== undefined && Array.isArray(message.keys)
+        && message.keys.length <= 256 && message.keys.every((key) => typeof key === 'string')) {
+        this.store.deleteChannels(message.sourceId, message.keys);
+        for (const key of message.keys) this.pendingBatches.delete(`${message.sourceId}:${key}`);
+        this.catalogDirty = true;
       } else if (
         message.type === 'deleteSource' &&
         Number.isInteger(message.sourceId) &&
