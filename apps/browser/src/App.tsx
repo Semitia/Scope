@@ -2,13 +2,13 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   Activity,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
-  Database,
   Download,
   Eye,
   EyeOff,
   Gauge,
-  Menu,
   Moon,
   Palette,
   Pause,
@@ -33,7 +33,6 @@ import { ValueBarPanel } from './components/ValueBarPanel';
 import { useTelemetry } from './hooks/useTelemetry';
 import {
   DEFAULT_STATE_COLORS,
-  panelTypeLabel,
   type PanelDefinition,
   type PanelGridLayout,
   type PanelType,
@@ -66,8 +65,7 @@ const COLLAPSED_PANELS_KEY = 'debugscope.collapsed-panels.v1';
 const MAX_PANELS = 8;
 const WORKSPACE_TEMPLATE_KEY = '__debugscope_workspace_template__';
 const GRID_COLUMNS = 12;
-const GRID_GAP = 12;
-const GRID_ROW_HEIGHT = 72;
+const GRID_ROW_HEIGHT = 84;
 const PANEL_REFLOW_DURATION_MS = 260;
 const MIN_PANEL_WIDTH = 3;
 const MIN_PANEL_HEIGHT = 2;
@@ -86,6 +84,8 @@ interface UserSettings {
   scrollWhenIdle: boolean;
   fontScale: number;
   sidebarWidth: number;
+  visualStyle: 'compact' | 'cards';
+  sidebarCollapsed: boolean;
 }
 
 type ScopeLayouts = Record<string, PanelDefinition[]>;
@@ -432,9 +432,11 @@ function initialSettings(): UserSettings {
     const sidebarWidth = typeof stored.sidebarWidth === 'number' && Number.isFinite(stored.sidebarWidth)
       ? Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, stored.sidebarWidth))
       : DEFAULT_SIDEBAR_WIDTH;
-    return { scrollWhenIdle: stored.scrollWhenIdle === true, fontScale, sidebarWidth };
+    return { scrollWhenIdle: stored.scrollWhenIdle === true, fontScale, sidebarWidth,
+      visualStyle: stored.visualStyle === 'cards' ? 'cards' : 'compact',
+      sidebarCollapsed: stored.sidebarCollapsed === true };
   } catch {
-    return { scrollWhenIdle: false, fontScale: 1, sidebarWidth: DEFAULT_SIDEBAR_WIDTH };
+    return { scrollWhenIdle: false, fontScale: 1, sidebarWidth: DEFAULT_SIDEBAR_WIDTH, visualStyle: 'compact', sidebarCollapsed: false };
   }
 }
 
@@ -557,6 +559,7 @@ function placePanelWithoutOverlap(
 function compactCollapsedPanels(
   panels: PanelDefinition[],
   collapsedPanelIds: ReadonlySet<string>,
+  gap: number,
 ): PanelDefinition[] {
   if (collapsedPanelIds.size === 0) return panels;
 
@@ -569,12 +572,12 @@ function compactCollapsedPanels(
   for (const panel of ordered) {
     const next = {
       ...panel.layout,
-      height: collapsedPanelIds.has(panel.id) ? 0.5 : panel.layout.height,
+      height: collapsedPanelIds.has(panel.id) ? (28 + gap) / GRID_ROW_HEIGHT : panel.layout.height,
     };
     while (next.y > 0) {
-      const candidate = { ...next, y: next.y - 0.5 };
+      const candidate = { ...next, y: (Math.round(next.y * GRID_ROW_HEIGHT) - 1) / GRID_ROW_HEIGHT };
       if (placed.some((layout) => layoutsOverlap(candidate, layout))) break;
-      next.y -= 0.5;
+      next.y = candidate.y;
     }
     layouts.set(panel.id, next);
     placed.push(next);
@@ -699,7 +702,12 @@ function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[
           || typeof candidate.color !== 'string'
           || !/^#[0-9a-f]{6}$/i.test(candidate.color)
         ) return [];
-        return [{ value: candidate.value, label: candidate.label, color: candidate.color }];
+        const color = candidate.value === 0
+          && candidate.label === 'Off'
+          && candidate.color.toLowerCase() === '#718096'
+          ? '#b8c0c8'
+          : candidate.color;
+        return [{ value: candidate.value, label: candidate.label, color }];
       });
       const distinctStateValues = new Set(stateColors.map((state) => state.value));
       if (strict && (
@@ -866,6 +874,17 @@ export default function App() {
   const [pausedAt, setPausedAt] = useState<number | null>(null);
   const [channelSearch, setChannelSearch] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [narrowLayout, setNarrowLayout] = useState(() => window.matchMedia('(max-width: 920px)').matches);
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 920px)');
+    const update = () => setNarrowLayout(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  const sidebarVisible = narrowLayout ? sidebarOpen : !settings.sidebarCollapsed;
+  const sidebarToggleLabel = narrowLayout
+    ? (sidebarVisible ? 'Close channels' : 'Open channels')
+    : (sidebarVisible ? 'Collapse sidebar' : 'Expand sidebar');
   const [hubEditorOpen, setHubEditorOpen] = useState(false);
   const [hubAddress, setHubAddress] = useState('');
   const [hubAddressError, setHubAddressError] = useState('');
@@ -928,10 +947,12 @@ export default function App() {
       scopePanels.some((panel) => panel.id === panelId)
     )),
   ), [collapsedPanels, layoutKey, scopePanels]);
+  const gridGap = settings.visualStyle === 'cards' ? 12 : 0;
   const displayedPanels = useMemo(() => compactCollapsedPanels(
     layoutPreview ?? scopePanels,
     collapsedPanelIds,
-  ), [collapsedPanelIds, layoutPreview, scopePanels]);
+    gridGap,
+  ), [collapsedPanelIds, layoutPreview, scopePanels, gridGap]);
   const capturePanelRectsBeforeReflow = useCallback(() => {
     const grid = gridRef.current;
     if (!grid) return;
@@ -1261,10 +1282,10 @@ export default function App() {
 
     const move = (event: PointerEvent) => {
       const columnWidth = (
-        layoutInteraction.workspaceWidth - GRID_GAP * (GRID_COLUMNS - 1)
+        layoutInteraction.workspaceWidth - gridGap * (GRID_COLUMNS - 1)
       ) / GRID_COLUMNS;
-      const columnStep = Math.max(1, columnWidth + GRID_GAP);
-      const rowStep = GRID_ROW_HEIGHT + GRID_GAP;
+      const columnStep = Math.max(1, columnWidth + gridGap);
+      const rowStep = GRID_ROW_HEIGHT;
       const deltaColumns = Math.round((event.clientX - layoutInteraction.startX) / columnStep);
       const deltaRows = Math.round((event.clientY - layoutInteraction.startY) / rowStep);
       const origin = layoutInteraction.origin;
@@ -1318,7 +1339,7 @@ export default function App() {
       window.removeEventListener('pointercancel', pointerUp);
       window.removeEventListener('keydown', keyDown);
     };
-  }, [layoutInteraction, updateScopePanels]);
+  }, [layoutInteraction, updateScopePanels, gridGap]);
 
   const setScopeChannelKeys = useCallback((scopeId: string, channelKeys: string[]) => {
     updateScopePanels((panels) => panels.map((panel) => panel.id === scopeId
@@ -1387,7 +1408,7 @@ export default function App() {
       id: createScopeId(),
       title: nextPanelTitle(scopePanels, type),
       channelKeys: [],
-      layout: { x: 0, y: nextRow, width: GRID_COLUMNS, height: type === 'indicators' ? 2 : 4 },
+      layout: { x: 0, y: nextRow, width: GRID_COLUMNS, height: type === 'indicators' ? 1 : 4 },
     };
     const panel: PanelDefinition = type === 'value-bar'
       ? {
@@ -1609,27 +1630,33 @@ export default function App() {
 
   return (
     <div
-      className={`app-shell${sidebarOpen ? ' sidebar-open' : ''}`}
-      style={{ '--sidebar-width': `${settings.sidebarWidth}px` } as React.CSSProperties}
+      className={`app-shell${sidebarOpen ? ' sidebar-open' : ''}${settings.sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
+      data-visual-style={settings.visualStyle}
+      style={{ '--sidebar-width': `${settings.sidebarWidth}px`, '--panel-gap': `${gridGap}px` } as React.CSSProperties}
     >
       <header className="app-bar">
         <div className="brand-block">
           <span className="brand-mark" aria-hidden="true">
-            <Activity size={19} strokeWidth={2.3} />
+            <Activity size={19} strokeWidth={2.3} aria-hidden="true" />
           </span>
           <strong>DebugScope</strong>
           <span className="preview-badge">PREVIEW</span>
+          <button
+            className="sidebar-toggle"
+            type="button"
+            aria-label={sidebarToggleLabel}
+            aria-expanded={sidebarVisible}
+            title={sidebarToggleLabel}
+            onClick={() => {
+              if (narrowLayout) setSidebarOpen((open) => !open);
+              else setSettings((current) => ({ ...current, sidebarCollapsed: !current.sidebarCollapsed }));
+            }}
+          >
+            {sidebarVisible
+              ? <ChevronLeft size={14} aria-hidden="true" />
+              : <ChevronRight size={14} aria-hidden="true" />}
+          </button>
         </div>
-
-        <button
-          className="icon-button mobile-menu"
-          type="button"
-          onClick={() => setSidebarOpen((open) => !open)}
-          aria-label={sidebarOpen ? 'Close channels' : 'Open channels'}
-          aria-expanded={sidebarOpen}
-        >
-          {sidebarOpen ? <X size={18} /> : <Menu size={18} />}
-        </button>
 
         <div className="app-context">
           <span>
@@ -1907,6 +1934,7 @@ export default function App() {
                       className={`channel-row${selected ? ' selected' : ''}${visible ? '' : ' hidden'}`}
                       key={channel.id}
                       role="button"
+                      aria-label={channel.key}
                       tabIndex={0}
                       onClick={() => setSelectedChannel(channel.id)}
                       onKeyDown={(event) => {
@@ -1929,9 +1957,8 @@ export default function App() {
                         className="channel-swatch"
                         style={{ '--channel-color': channel.color } as React.CSSProperties}
                       />
-                      <span className="channel-copy">
+                      <span className="channel-copy" title={channel.key}>
                         <strong>{channel.label}</strong>
-                        <small>{channel.key}</small>
                       </span>
                       <span className="channel-value">
                         <b>{formatValue(telemetry.latest[channelIndex] ?? channel.lastValue ?? 0)}</b>
@@ -2037,14 +2064,6 @@ export default function App() {
           )}
         </section>
 
-        <div className="sidebar-footer">
-          <span className="capture-ring"><Database size={15} /></span>
-          <span>
-            <strong>{telemetry.mode === 'demo' ? 'Local demo capture' : 'Hub capture'}</strong>
-            <small>Recent history stays in memory</small>
-          </span>
-        </div>
-
         <div
           className="sidebar-resize-handle"
           role="separator"
@@ -2077,7 +2096,7 @@ export default function App() {
           className="scope-grid"
           ref={gridRef}
         >
-          {displayedPanels.map((panel, panelIndex) => {
+          {displayedPanels.map((panel) => {
             const panelChannelKeys = new Set(effectivePanelChannelKeys(panel, channels));
             const panelChannels = channels.filter((channel) => panelChannelKeys.has(channel.key));
             const panelVisibleChannels = new Set(
@@ -2103,7 +2122,7 @@ export default function App() {
                 data-grid-height={panel.layout.height}
                 style={{
                   gridColumn: `${panel.layout.x + 1} / span ${panel.layout.width}`,
-                  gridRow: `${Math.round(panel.layout.y * 2) + 1} / span ${Math.round(panel.layout.height * 2)}`,
+                  gridRow: `${Math.round(panel.layout.y * GRID_ROW_HEIGHT) + 1} / span ${Math.round(panel.layout.height * GRID_ROW_HEIGHT)}`,
                 }}
               >
                 <div className="plot-legend">
@@ -2128,7 +2147,6 @@ export default function App() {
                     <GripVertical size={14} />
                   </button>
                   <div className="scope-identity">
-                    <span>{String(panelIndex + 1).padStart(2, '0')}</span>
                     <span className="scope-identity-copy">
                       {editingPanelTitleId === panel.id ? (
                         <input
@@ -2169,11 +2187,10 @@ export default function App() {
                           {panel.title}
                         </button>
                       )}
-                      <small>{panelTypeLabel(panel.type)}</small>
                     </span>
                   </div>
 
-                  {!panelCollapsed && <div className="scope-legend-scroll" aria-label={`${panel.title} channel legend`}>
+                  {!panelCollapsed && panel.type === 'scope' && <div className="scope-legend-scroll" aria-label={`${panel.title} channel legend`}>
                     {channels.filter((channel) => panelVisibleChannels.has(channel.id)).map((channel) => {
                       const channelIndex = channelIndexes.get(channel.id) ?? -1;
                       const selected = panelIsActive && channel.id === selectedChannel;
@@ -2200,9 +2217,6 @@ export default function App() {
                         </button>
                       );
                     })}
-                    {panelVisibleChannels.size === 0 && (
-                      <span className="legend-empty">No channels selected</span>
-                    )}
                   </div>}
 
                   {panelCollapsed && (
@@ -2308,7 +2322,7 @@ export default function App() {
                     ))}
                     emptyTitle={channels.length > 0 ? `No channels in ${panel.title}` : emptyTitle}
                     emptyMessage={channels.length > 0
-                      ? 'Choose the signals this scope should display. Each scope keeps an independent Y range.'
+                      ? 'Choose channels to display.'
                       : emptyMessage}
                     showEmptyAction={channels.length > 0}
                   />
@@ -2496,6 +2510,23 @@ export default function App() {
               <div className="settings-section-heading">
                 <span id="appearance-settings-title">APPEARANCE</span>
                 <small>{Math.round(settings.fontScale * 100)}%</small>
+              </div>
+              <div className="settings-entry">
+                <span className="settings-entry-copy">
+                  <strong>Interface style</strong>
+                  <small>Compact joins panels; Cards adds spacing and rounded surfaces.</small>
+                </span>
+                <select
+                  className="style-select"
+                  aria-label="Interface style"
+                  value={settings.visualStyle}
+                  onChange={(event) => setSettings((current) => ({
+                    ...current, visualStyle: event.target.value as UserSettings['visualStyle'],
+                  }))}
+                >
+                  <option value="compact">Compact</option>
+                  <option value="cards">Cards</option>
+                </select>
               </div>
               <div className="settings-entry font-size-setting">
                 <span className="settings-entry-copy">

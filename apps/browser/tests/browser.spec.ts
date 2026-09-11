@@ -61,10 +61,10 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await expect(controllerGroup).toHaveAttribute('aria-expanded', 'true');
   await controllerGroup.click();
   await expect(controllerGroup).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.locator('.channel-row').filter({ hasText: 'controller.target' })).toHaveCount(0);
+  await expect(page.locator('.channel-row[aria-label="controller.target"]')).toHaveCount(0);
   await page.getByPlaceholder('Filter channels').fill('Target');
   await expect(controllerGroup).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.locator('.channel-row').filter({ hasText: 'controller.target' })).toBeVisible();
+  await expect(page.locator('.channel-row[aria-label="controller.target"]')).toBeVisible();
   await page.getByRole('button', { name: 'Clear channel filter' }).click();
   await expect(controllerGroup).toHaveAttribute('aria-expanded', 'false');
   await page.reload();
@@ -228,6 +228,13 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   );
   await expect(valuePanel).toHaveAttribute('data-grid-x', '6');
   await expect(valuePanel).toHaveAttribute('data-grid-y', '0');
+  const leftBounds = await scopeOne.boundingBox();
+  const rightBounds = await valuePanel.boundingBox();
+  expect(leftBounds).not.toBeNull();
+  expect(rightBounds).not.toBeNull();
+  expect(Math.abs(rightBounds!.x - (leftBounds!.x + leftBounds!.width))).toBeLessThanOrEqual(1);
+  await expect(page.locator('.workspace')).toHaveCSS('padding', '0px');
+  await expect(page.locator('.scope-grid')).toHaveCSS('gap', '0px');
 
   await page.getByRole('button', { name: 'Add panel' }).click();
   await page.getByRole('menuitem', { name: /Indicators/ }).click();
@@ -236,6 +243,10 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await page.getByRole('button', { name: 'Close channels for Indicators 1' }).click();
   const indicatorPanel = page.getByRole('region', { name: 'Indicators 1' });
   await expect(indicatorPanel.locator('.indicator-item')).toHaveCount(3);
+  await expect(indicatorPanel.locator('.legend-item')).toHaveCount(0);
+  await expect(indicatorPanel.locator('.indicator-group-name')).toHaveText('limit');
+  await expect(indicatorPanel.locator('.indicator-copy small')).toHaveCount(0);
+  await expect(indicatorPanel.locator('.indicator-item').first()).toHaveAttribute('title', /limit\.0/);
   await dragBy(
     page,
     indicatorPanel.getByRole('button', { name: 'Resize Indicators 1' }),
@@ -262,7 +273,7 @@ test('desktop workbench renders and core controls work', async ({ page }) => {
   await expect(page.getByRole('region', { name: 'Value Bars 1' })
     .getByRole('button', { name: 'Edit minimum for Target' })).toHaveText('800');
   await expect(page.getByRole('region', { name: 'Value Bars 1' })
-    .getByRole('button', { name: 'Edit maximum for Target' })).toHaveText('1,600');
+    .getByRole('button', { name: 'Edit maximum for Target' })).toHaveText('1600');
   await expect(page.getByRole('region', { name: 'Indicators 1' }).locator('.indicator-item')).toHaveCount(3);
 
   await openSettings.click();
@@ -371,7 +382,8 @@ test('compact layout keeps the waveform primary', async ({ page }) => {
   await page.waitForTimeout(220);
   await page.screenshot({ path: '../../artifacts/debugscope-760x720.png', fullPage: true });
 
-  await page.getByRole('button', { name: 'Close channels' }).last().click();
+  await page.locator('.sidebar-toggle').click();
+  await expect(page.locator('.sidebar')).toBeHidden();
   await expect(page.locator('.scope-panel')).toBeVisible();
 });
 
@@ -394,16 +406,16 @@ test('workspace panels collapse and reflow vertically', async ({ page }) => {
   await scope.getByRole('button', { name: 'Collapse Scope 1' }).click();
   await reflowStarted;
   await expect(scope).toHaveAttribute('aria-expanded', 'false');
-  await expect(scope).toHaveAttribute('data-grid-height', '0.5');
-  await expect.poll(async () => Math.round((await scope.boundingBox())?.height ?? 0)).toBe(30);
+  await expect(scope).toHaveAttribute('data-grid-height', String(1 / 3));
+  await expect.poll(async () => Math.round((await scope.boundingBox())?.height ?? 0)).toBe(28);
   await expect(scope.locator('.plot-stage')).toHaveCount(0);
-  await expect(valueBars).toHaveAttribute('data-grid-y', '0.5');
+  await expect(valueBars).toHaveAttribute('data-grid-y', String(1 / 3));
 
   await page.reload();
   const restoredScope = page.getByRole('region', { name: 'Scope 1' });
   const restoredValueBars = page.getByRole('region', { name: 'Value Bars 1' });
   await expect(restoredScope).toHaveAttribute('aria-expanded', 'false');
-  await expect(restoredValueBars).toHaveAttribute('data-grid-y', '0.5');
+  await expect(restoredValueBars).toHaveAttribute('data-grid-y', String(1 / 3));
 
   await restoredScope.getByRole('button', { name: 'Expand Scope 1' }).click();
   await expect(restoredScope).toHaveAttribute('data-grid-height', '8');
@@ -429,4 +441,35 @@ test('workspace panels can be prepared without a producer', async ({ page }) => 
   await expect(page.locator('.scope-panel')).toHaveCount(3);
   await expect(page.getByRole('region', { name: 'Value Bars 1' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Indicators 1' })).toBeVisible();
+});
+
+
+test('interface styles and sidebar visibility persist with thin collapsed headers', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?demo=1');
+  await expect(page.locator('.sidebar-footer')).toHaveCount(0);
+  await expect(page.locator('.brand-mark')).not.toHaveAttribute('role', 'button');
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+  await expect(page.locator('.sidebar')).toBeHidden();
+  await expect(page.locator('.workspace')).toHaveJSProperty('offsetLeft', 0);
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByLabel('Interface style').selectOption('cards');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.workspace')).toHaveCSS('padding', '12px');
+  await expect(page.locator('.scope-panel').first()).toHaveCSS('border-radius', '8px');
+  const scope = page.getByRole('region', { name: 'Scope 1' });
+  await scope.getByRole('button', { name: 'Collapse Scope 1', exact: true }).click();
+  await expect.poll(async () => Math.round((await scope.boundingBox())!.height)).toBe(28);
+  await page.reload();
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-visual-style', 'cards');
+  await expect(page.locator('.sidebar')).toBeHidden();
+  await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+  await expect(page.locator('.sidebar')).toBeVisible();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByLabel('Interface style').selectOption('compact');
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => Math.round((await scope.boundingBox())!.height)).toBe(28);
+  await expect(page.locator('.workspace')).toHaveCSS('padding', '0px');
+  await scope.getByRole('button', { name: 'Expand Scope 1', exact: true }).click();
+  await expect(scope.locator('.scope-y-control')).toHaveCSS('height', '22px');
 });

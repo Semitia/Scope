@@ -33,6 +33,13 @@ export function IndicatorPanel({
   onChange,
 }: IndicatorPanelProps) {
   const selected = channels.filter((channel) => panel.channelKeys.includes(channel.key));
+  // Keep each namespace once, while retaining custom labels and full keys in tooltips.
+  const groups = new Map<string, ChannelDefinition[]>();
+  for (const channel of selected) {
+    const separator = channel.key.lastIndexOf('.');
+    const group = separator > 0 ? channel.key.slice(0, separator) : '';
+    groups.set(group, [...(groups.get(group) ?? []), channel]);
+  }
   const stateColors = panel.stateColors.length > 0 ? panel.stateColors : DEFAULT_STATE_COLORS;
 
   const updateState = (index: number, patch: Partial<StateColorDefinition>) => {
@@ -109,7 +116,11 @@ export function IndicatorPanel({
       ), document.body)}
 
       <div className="indicator-grid">
-        {selected.map((channel) => {
+        {[...groups].map(([group, groupChannels]) => (
+          <div className="indicator-group" key={group}>
+            {group && <span className="indicator-group-name" title={group}>{group}</span>}
+            <div className="indicator-group-items">
+        {groupChannels.map((channel) => {
           const index = channelIndexes.get(channel.id) ?? -1;
           const value = latest[index] ?? channel.lastValue ?? 0;
           const mapped = stateColors.find((state) => state.value === value);
@@ -119,23 +130,26 @@ export function IndicatorPanel({
             <article
               className="indicator-item"
               key={channel.id}
+              title={`${channel.key} · ${label}: ${displayStateValue(value)}`}
+              aria-label={`${channel.key}: ${displayStateValue(value)} (${label})`}
               style={{ '--indicator-color': color } as React.CSSProperties}
             >
-              <span className="indicator-light" aria-hidden="true" />
               <span className="indicator-copy">
-                <strong>{channel.label}</strong>
-                <small>{channel.key}</small>
+                <strong>{group && channel.label === channel.key ? channel.key.slice(group.length + 1) : channel.label}</strong>
               </span>
-              <span className="indicator-state" title={label}>
+              <span className={`indicator-state${value !== 0 ? ' is-lit' : ''}`} title={label}>
                 {displayStateValue(value)}
               </span>
             </article>
           );
         })}
+            </div>
+          </div>
+        ))}
         {selected.length === 0 && (
           <div className="instrument-empty">
             <strong>No state channels selected</strong>
-            <span>Choose a channel, or bind a numbered channel group such as limit.</span>
+            <span>Choose channels to display.</span>
           </div>
         )}
       </div>

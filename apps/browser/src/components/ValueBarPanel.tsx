@@ -26,7 +26,10 @@ interface RangeEdit {
   edge: 'min' | 'max';
 }
 
-const INSTRUMENT_NUMBER_FORMAT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 });
+const INSTRUMENT_NUMBER_FORMAT = new Intl.NumberFormat('en-US', {
+  maximumSignificantDigits: 4,
+  useGrouping: false,
+});
 
 function formatInstrumentValue(value: number): string {
   if (!Number.isFinite(value)) return '—';
@@ -123,8 +126,7 @@ export function ValueBarPanel({
             <article className="value-bar-item" key={channel.id}>
               <div className="value-bar-heading">
                 <span>
-                  <strong>{channel.label}</strong>
-                  <small>{channel.key}</small>
+                  <strong title={channel.key}>{channel.label}</strong>
                 </span>
                 <span className="value-bar-reading">
                   <b>{formatInstrumentValue(value)}</b>

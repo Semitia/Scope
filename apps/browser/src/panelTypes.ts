@@ -58,7 +58,7 @@ export type PanelDefinition =
 
 export const DEFAULT_STATE_COLORS: StateColorDefinition[] = [
   { value: -1, label: 'Fault', color: '#e14f61' },
-  { value: 0, label: 'Off', color: '#718096' },
+  { value: 0, label: 'Off', color: '#b8c0c8' },
   { value: 1, label: 'On', color: '#19a974' },
   { value: 2, label: 'Warning', color: '#e69a24' },
 ];
