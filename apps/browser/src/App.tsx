@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   ChevronDown,
+  ChevronUp,
   Database,
   Download,
   Eye,
@@ -61,11 +62,13 @@ const SCOPE_LAYOUTS_KEY = 'debugscope.scope-layouts.v1';
 const THEME_KEY = 'debugscope.theme.v1';
 const SETTINGS_KEY = 'debugscope.settings.v1';
 const COLLAPSED_CHANNEL_GROUPS_KEY = 'debugscope.collapsed-channel-groups.v1';
+const COLLAPSED_PANELS_KEY = 'debugscope.collapsed-panels.v1';
 const MAX_PANELS = 8;
 const WORKSPACE_TEMPLATE_KEY = '__debugscope_workspace_template__';
 const GRID_COLUMNS = 12;
 const GRID_GAP = 12;
 const GRID_ROW_HEIGHT = 72;
+const PANEL_REFLOW_DURATION_MS = 260;
 const MIN_PANEL_WIDTH = 3;
 const MIN_PANEL_HEIGHT = 2;
 const MIN_INDICATOR_PANEL_WIDTH = 2;
@@ -449,6 +452,20 @@ function initialCollapsedChannelGroups(): Record<string, string[]> {
   }
 }
 
+function initialCollapsedPanels(): Record<string, string[]> {
+  try {
+    const stored = JSON.parse(localStorage.getItem(COLLAPSED_PANELS_KEY) ?? '{}') as unknown;
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
+    return Object.fromEntries(Object.entries(stored as Record<string, unknown>).flatMap(([key, value]) => (
+      Array.isArray(value)
+        ? [[key, [...new Set(value.filter((panelId): panelId is string => typeof panelId === 'string'))]]]
+        : []
+    )));
+  } catch {
+    return {};
+  }
+}
+
 function defaultPanelLayout(index: number, single = false): PanelGridLayout {
   const height = single ? 8 : 4;
   return { x: 0, y: index * height, width: GRID_COLUMNS, height };
@@ -535,6 +552,38 @@ function placePanelWithoutOverlap(
   }
 
   return panels.map((panel) => ({ ...panel, layout: layouts.get(panel.id) ?? panel.layout }));
+}
+
+function compactCollapsedPanels(
+  panels: PanelDefinition[],
+  collapsedPanelIds: ReadonlySet<string>,
+): PanelDefinition[] {
+  if (collapsedPanelIds.size === 0) return panels;
+
+  const placed: PanelGridLayout[] = [];
+  const layouts = new Map<string, PanelGridLayout>();
+  const ordered = [...panels].sort((left, right) => (
+    left.layout.y - right.layout.y || left.layout.x - right.layout.x
+  ));
+
+  for (const panel of ordered) {
+    const next = {
+      ...panel.layout,
+      height: collapsedPanelIds.has(panel.id) ? 0.5 : panel.layout.height,
+    };
+    while (next.y > 0) {
+      const candidate = { ...next, y: next.y - 0.5 };
+      if (placed.some((layout) => layoutsOverlap(candidate, layout))) break;
+      next.y -= 0.5;
+    }
+    layouts.set(panel.id, next);
+    placed.push(next);
+  }
+
+  return panels.map((panel) => ({
+    ...panel,
+    layout: layouts.get(panel.id) ?? panel.layout,
+  }));
 }
 
 function parsePanelDefinitions(value: unknown, strict = false): PanelDefinition[] {
@@ -795,6 +844,9 @@ export default function App() {
   const [collapsedChannelGroups, setCollapsedChannelGroups] = useState<Record<string, string[]>>(
     initialCollapsedChannelGroups,
   );
+  const [collapsedPanels, setCollapsedPanels] = useState<Record<string, string[]>>(
+    initialCollapsedPanels,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceFeedback, setWorkspaceFeedback] = useState<WorkspaceFeedback | null>(null);
   const [channelStyles, setChannelStyles] = useState<Record<string, StoredChannelStyle>>(
@@ -821,6 +873,8 @@ export default function App() {
   const [renderRates, setRenderRates] = useState<Record<string, number>>({});
   const gridRef = useRef<HTMLDivElement>(null);
   const layoutPreviewRef = useRef<PanelDefinition[] | null>(null);
+  const panelRectsBeforeReflowRef = useRef<Map<string, DOMRect> | null>(null);
+  const panelReflowAnimationsRef = useRef<Map<string, Animation>>(new Map());
   const workspaceFileRef = useRef<HTMLInputElement>(null);
   const sidebarResizeRef = useRef<SidebarResizeInteraction | null>(null);
 
@@ -869,7 +923,68 @@ export default function App() {
     }
     return [defaultScope];
   }, [defaultScope, layoutKey, scopeLayouts]);
-  const displayedPanels = layoutPreview ?? scopePanels;
+  const collapsedPanelIds = useMemo(() => new Set(
+    (collapsedPanels[layoutKey] ?? []).filter((panelId) => (
+      scopePanels.some((panel) => panel.id === panelId)
+    )),
+  ), [collapsedPanels, layoutKey, scopePanels]);
+  const displayedPanels = useMemo(() => compactCollapsedPanels(
+    layoutPreview ?? scopePanels,
+    collapsedPanelIds,
+  ), [collapsedPanelIds, layoutPreview, scopePanels]);
+  const capturePanelRectsBeforeReflow = useCallback(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+
+    const rects = new Map<string, DOMRect>();
+    grid.querySelectorAll<HTMLElement>('.scope-panel[data-panel-id]').forEach((element) => {
+      const panelId = element.dataset.panelId;
+      if (panelId) rects.set(panelId, element.getBoundingClientRect());
+    });
+    panelRectsBeforeReflowRef.current = rects;
+    panelReflowAnimationsRef.current.forEach((animation) => animation.cancel());
+    panelReflowAnimationsRef.current.clear();
+  }, []);
+
+  useLayoutEffect(() => {
+    const previousRects = panelRectsBeforeReflowRef.current;
+    panelRectsBeforeReflowRef.current = null;
+    const grid = gridRef.current;
+    if (!previousRects || !grid || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return;
+    }
+
+    grid.querySelectorAll<HTMLElement>('.scope-panel[data-panel-id]').forEach((element) => {
+      const panelId = element.dataset.panelId;
+      const previous = panelId ? previousRects.get(panelId) : undefined;
+      if (!panelId || !previous) return;
+      const next = element.getBoundingClientRect();
+      const deltaX = previous.left - next.left;
+      const deltaY = previous.top - next.top;
+      const heightChanged = Math.abs(previous.height - next.height) > 0.5;
+      if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5 && !heightChanged) return;
+
+      const animation = element.animate([
+        {
+          height: `${previous.height}px`,
+          transform: `translate(${deltaX}px, ${deltaY}px)`,
+        },
+        {
+          height: `${next.height}px`,
+          transform: 'translate(0, 0)',
+        },
+      ], {
+        duration: PANEL_REFLOW_DURATION_MS,
+        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+      });
+      panelReflowAnimationsRef.current.set(panelId, animation);
+      animation.onfinish = () => {
+        if (panelReflowAnimationsRef.current.get(panelId) === animation) {
+          panelReflowAnimationsRef.current.delete(panelId);
+        }
+      };
+    });
+  }, [displayedPanels]);
   const activeScope = scopePanels.find((panel) => panel.id === activeScopeId) ?? scopePanels[0];
   const activeScopeChannelIds = useMemo(() => {
     const keys = new Set(effectivePanelChannelKeys(activeScope, channels));
@@ -931,6 +1046,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(COLLAPSED_CHANNEL_GROUPS_KEY, JSON.stringify(collapsedChannelGroups));
   }, [collapsedChannelGroups]);
+
+  useEffect(() => {
+    localStorage.setItem(COLLAPSED_PANELS_KEY, JSON.stringify(collapsedPanels));
+  }, [collapsedPanels]);
 
   useEffect(() => {
     localStorage.setItem(SCOPE_LAYOUTS_KEY, JSON.stringify(scopeLayouts));
@@ -1115,7 +1234,7 @@ export default function App() {
     panel: PanelDefinition,
     kind: LayoutInteraction['kind'],
   ) => {
-    if (window.innerWidth <= 920 || event.button !== 0) return;
+    if (window.innerWidth <= 920 || event.button !== 0 || collapsedPanelIds.size > 0) return;
     const grid = gridRef.current;
     if (!grid) return;
     event.preventDefault();
@@ -1133,7 +1252,7 @@ export default function App() {
       panels: scopePanels,
       workspaceWidth: grid.getBoundingClientRect().width,
     });
-  }, [scopePanels]);
+  }, [collapsedPanelIds.size, scopePanels]);
 
   useEffect(() => {
     if (!layoutInteraction) return;
@@ -1225,6 +1344,18 @@ export default function App() {
     )));
   }, [updateScopePanels]);
 
+  const togglePanelCollapsed = useCallback((panelId: string) => {
+    capturePanelRectsBeforeReflow();
+    setCollapsedPanels((current) => {
+      const nextPanelIds = new Set(current[layoutKey] ?? []);
+      if (nextPanelIds.has(panelId)) nextPanelIds.delete(panelId);
+      else nextPanelIds.add(panelId);
+      return { ...current, [layoutKey]: [...nextPanelIds] };
+    });
+    setChannelPickerScopeId((current) => current === panelId ? null : current);
+    setColorEditorPanelId((current) => current === panelId ? null : current);
+  }, [capturePanelRectsBeforeReflow, layoutKey]);
+
   const finishPanelTitleEdit = useCallback((panelId: string) => {
     const title = panelTitleDraft.trim().slice(0, 120);
     if (title) updatePanel(panelId, { title });
@@ -1293,14 +1424,18 @@ export default function App() {
     if (activeScopeId === scopeId) setActiveScopeId(remaining[0]?.id ?? null);
     if (channelPickerScopeId === scopeId) setChannelPickerScopeId(null);
     if (colorEditorPanelId === scopeId) setColorEditorPanelId(null);
+    setCollapsedPanels((current) => ({
+      ...current,
+      [layoutKey]: (current[layoutKey] ?? []).filter((panelId) => panelId !== scopeId),
+    }));
   };
 
   const visiblePointCount = scopePanels.reduce(
-    (total, panel) => total + (visiblePointCounts[panel.id] ?? 0),
+    (total, panel) => total + (collapsedPanelIds.has(panel.id) ? 0 : (visiblePointCounts[panel.id] ?? 0)),
     0,
   );
   const currentRenderRates = scopePanels
-    .map((panel) => renderRates[panel.id] ?? 0)
+    .map((panel) => collapsedPanelIds.has(panel.id) ? 0 : (renderRates[panel.id] ?? 0))
     .filter((rate) => rate > 0);
   const renderRate = currentRenderRates.length > 0
     ? Math.round(currentRenderRates.reduce((total, rate) => total + rate, 0) / currentRenderRates.length)
@@ -1349,6 +1484,7 @@ export default function App() {
     try {
       const config = parseWorkspaceConfig(JSON.parse(await file.text()) as unknown);
       setScopeLayouts((current) => ({ ...current, [layoutKey]: config.panels }));
+      setCollapsedPanels((current) => ({ ...current, [layoutKey]: [] }));
       setActiveScopeId(config.panels[0]?.id ?? null);
       setChannelPickerScopeId(null);
       setLayoutPreview(null);
@@ -1948,32 +2084,46 @@ export default function App() {
               panelChannels.map((channel) => channel.id),
             );
             const panelIsActive = panel.id === activeScope?.id;
-            const pickerOpen = panel.id === channelPickerScopeId;
+            const panelCollapsed = collapsedPanelIds.has(panel.id);
+            const pickerOpen = !panelCollapsed && panel.id === channelPickerScopeId;
 
             return (
               <section
-                className={`scope-panel panel-${panel.type}${panel.layout.width <= 2 ? ' compact-panel' : ''}${panelIsActive ? ' active' : ''}${
+                className={`scope-panel panel-${panel.type}${panel.layout.width <= 2 ? ' compact-panel' : ''}${panelIsActive ? ' active' : ''}${panelCollapsed ? ' collapsed' : ''}${
                   layoutInteraction?.panelId === panel.id ? ` layout-${layoutInteraction.kind}` : ''
                 }`}
                 aria-label={panel.title}
+                aria-expanded={!panelCollapsed}
                 key={panel.id}
                 onPointerDown={() => setActiveScopeId(panel.id)}
+                data-panel-id={panel.id}
                 data-grid-x={panel.layout.x}
                 data-grid-y={panel.layout.y}
                 data-grid-width={panel.layout.width}
                 data-grid-height={panel.layout.height}
                 style={{
                   gridColumn: `${panel.layout.x + 1} / span ${panel.layout.width}`,
-                  gridRow: `${panel.layout.y + 1} / span ${panel.layout.height}`,
+                  gridRow: `${Math.round(panel.layout.y * 2) + 1} / span ${Math.round(panel.layout.height * 2)}`,
                 }}
               >
                 <div className="plot-legend">
+                  <button
+                    className="scope-action panel-collapse-button"
+                    type="button"
+                    onClick={() => togglePanelCollapsed(panel.id)}
+                    aria-label={`${panelCollapsed ? 'Expand' : 'Collapse'} ${panel.title}`}
+                    aria-expanded={!panelCollapsed}
+                    title={`${panelCollapsed ? 'Expand' : 'Collapse'} ${panel.title}`}
+                  >
+                    {panelCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                  </button>
                   <button
                     className="panel-drag-handle"
                     type="button"
                     onPointerDown={(event) => beginLayoutInteraction(event, panel, 'move')}
                     aria-label={`Move ${panel.title}`}
-                    title="Drag to move panel"
+                    disabled={collapsedPanelIds.size > 0}
+                    title={collapsedPanelIds.size > 0 ? 'Expand all panels to rearrange them' : 'Drag to move panel'}
                   >
                     <GripVertical size={14} />
                   </button>
@@ -2023,7 +2173,7 @@ export default function App() {
                     </span>
                   </div>
 
-                  <div className="scope-legend-scroll" aria-label={`${panel.title} channel legend`}>
+                  {!panelCollapsed && <div className="scope-legend-scroll" aria-label={`${panel.title} channel legend`}>
                     {channels.filter((channel) => panelVisibleChannels.has(channel.id)).map((channel) => {
                       const channelIndex = channelIndexes.get(channel.id) ?? -1;
                       const selected = panelIsActive && channel.id === selectedChannel;
@@ -2053,10 +2203,16 @@ export default function App() {
                     {panelVisibleChannels.size === 0 && (
                       <span className="legend-empty">No channels selected</span>
                     )}
-                  </div>
+                  </div>}
+
+                  {panelCollapsed && (
+                    <span className="collapsed-panel-summary">
+                      {panelVisibleChannels.size} channel{panelVisibleChannels.size === 1 ? '' : 's'}
+                    </span>
+                  )}
 
                   <div className="scope-panel-actions">
-                    {panel.type === 'scope' && (
+                    {!panelCollapsed && panel.type === 'scope' && (
                       <>
                         <label
                           className={`scope-y-control mode-${panel.yScaleMode}`}
@@ -2083,7 +2239,7 @@ export default function App() {
                         />
                       </>
                     )}
-                    {panel.type === 'indicators' && (
+                    {!panelCollapsed && panel.type === 'indicators' && (
                       <button
                         className={`scope-action${colorEditorPanelId === panel.id ? ' active' : ''}`}
                         type="button"
@@ -2097,7 +2253,7 @@ export default function App() {
                         <Palette size={13} />
                       </button>
                     )}
-                    <button
+                    {!panelCollapsed && <button
                       className={`scope-action${pickerOpen ? ' active' : ''}`}
                       type="button"
                       onClick={() => setChannelPickerScopeId((current) => current === panel.id ? null : panel.id)}
@@ -2109,7 +2265,7 @@ export default function App() {
                     >
                       <SlidersHorizontal size={14} />
                       <span>{panelVisibleChannels.size}</span>
-                    </button>
+                    </button>}
                     {scopePanels.length > 1 && (
                       <button
                         className="scope-action danger"
@@ -2124,7 +2280,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {panel.type === 'scope' && (
+                {!panelCollapsed && panel.type === 'scope' && (
                   <WaveformPlot
                     channels={channels}
                     data={timeline.data}
@@ -2157,7 +2313,7 @@ export default function App() {
                     showEmptyAction={channels.length > 0}
                   />
                 )}
-                {panel.type === 'value-bar' && (
+                {!panelCollapsed && panel.type === 'value-bar' && (
                   <ValueBarPanel
                     panel={{ ...panel, channelKeys: [...panelChannelKeys] }}
                     channels={channels}
@@ -2167,7 +2323,7 @@ export default function App() {
                     onChange={(patch) => updatePanel(panel.id, patch as Partial<PanelDefinition>)}
                   />
                 )}
-                {panel.type === 'indicators' && (
+                {!panelCollapsed && panel.type === 'indicators' && (
                   <IndicatorPanel
                     panel={{ ...panel, channelKeys: [...panelChannelKeys] }}
                     channels={channels}
@@ -2275,13 +2431,14 @@ export default function App() {
                     </div>
                   </>
                 )}
-                <button
+                {!panelCollapsed && <button
                   className="panel-resize-handle"
                   type="button"
                   onPointerDown={(event) => beginLayoutInteraction(event, panel, 'resize')}
                   aria-label={`Resize ${panel.title}`}
-                  title="Drag to resize panel"
-                />
+                  disabled={collapsedPanelIds.size > 0}
+                  title={collapsedPanelIds.size > 0 ? 'Expand all panels to rearrange them' : 'Drag to resize panel'}
+                />}
               </section>
             );
           })}

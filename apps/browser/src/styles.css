@@ -1586,7 +1586,7 @@ select:focus-visible,
   height: auto;
   min-height: 100%;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-auto-rows: 72px;
+  grid-auto-rows: 30px;
   gap: 12px;
   align-content: start;
 }
@@ -1608,6 +1608,35 @@ select:focus-visible,
 
 .scope-panel.panel-indicators {
   grid-template-rows: 38px minmax(0, 1fr);
+}
+
+.scope-panel.collapsed,
+.scope-panel.panel-indicators.collapsed {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.scope-panel.collapsed .plot-legend {
+  gap: 4px;
+  padding-block: 1px;
+  border-bottom: 0;
+}
+
+.scope-panel.collapsed .panel-drag-handle,
+.scope-panel.collapsed .scope-action,
+.scope-panel.collapsed .scope-identity {
+  height: 26px;
+}
+
+.collapsed-panel-summary {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: calc(9.5px * var(--font-scale, 1));
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel-indicators .plot-legend {
@@ -1785,6 +1814,12 @@ select:focus-visible,
 
 .panel-drag-handle:active {
   cursor: grabbing;
+}
+
+.panel-drag-handle:disabled,
+.panel-resize-handle:disabled {
+  cursor: default;
+  opacity: 0.38;
 }
 
 .panel-resize-handle {

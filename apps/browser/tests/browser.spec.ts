@@ -375,6 +375,42 @@ test('compact layout keeps the waveform primary', async ({ page }) => {
   await expect(page.locator('.scope-panel')).toBeVisible();
 });
 
+test('workspace panels collapse and reflow vertically', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/?demo=1');
+
+  await page.getByRole('button', { name: 'Add panel' }).click();
+  await page.getByRole('menuitem', { name: /Value bars/ }).click();
+  await page.getByRole('button', { name: 'Close channels for Value Bars 1' }).click();
+
+  const scope = page.getByRole('region', { name: 'Scope 1' });
+  const valueBars = page.getByRole('region', { name: 'Value Bars 1' });
+  await expect(scope).toHaveAttribute('data-grid-height', '8');
+  await expect(valueBars).toHaveAttribute('data-grid-y', '8');
+
+  const reflowStarted = page.waitForFunction(() => (
+    (document.querySelector('[data-panel-id^="scope-default"]')?.getAnimations().length ?? 0) > 0
+  ));
+  await scope.getByRole('button', { name: 'Collapse Scope 1' }).click();
+  await reflowStarted;
+  await expect(scope).toHaveAttribute('aria-expanded', 'false');
+  await expect(scope).toHaveAttribute('data-grid-height', '0.5');
+  await expect.poll(async () => Math.round((await scope.boundingBox())?.height ?? 0)).toBe(30);
+  await expect(scope.locator('.plot-stage')).toHaveCount(0);
+  await expect(valueBars).toHaveAttribute('data-grid-y', '0.5');
+
+  await page.reload();
+  const restoredScope = page.getByRole('region', { name: 'Scope 1' });
+  const restoredValueBars = page.getByRole('region', { name: 'Value Bars 1' });
+  await expect(restoredScope).toHaveAttribute('aria-expanded', 'false');
+  await expect(restoredValueBars).toHaveAttribute('data-grid-y', '0.5');
+
+  await restoredScope.getByRole('button', { name: 'Expand Scope 1' }).click();
+  await expect(restoredScope).toHaveAttribute('data-grid-height', '8');
+  await expect(restoredValueBars).toHaveAttribute('data-grid-y', '8');
+  await expect(restoredScope.locator('.plot-stage')).toBeVisible();
+});
+
 test('workspace panels can be prepared without a producer', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/');
