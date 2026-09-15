@@ -1929,6 +1929,21 @@ select:focus-visible,
   white-space: nowrap;
 }
 
+.scope-action.panel-recording.recording { color: #e5484d; }
+.recording-time { font-variant-numeric: tabular-nums; font-size: 10px; }
+.recording-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .scope-panel-actions {
   display: flex;
   flex: 0 0 auto;
@@ -3524,5 +3539,5 @@ select:focus-visible,
     inset 1px 0 var(--dock-highlight);
 }
 
-.wristed-topbar .wristed-appearance[aria-pressed="true"] { color: #185b83; background: #e2f0f7; border-color: #99bfd3; }
+.wristed-topbar button[aria-pressed="true"] { color: #185b83; background: #e2f0f7; border-color: #99bfd3; }
 .wristed-model-notice { position: absolute; top: 45px; left: 12px; color: #627385; font-size: 11px; pointer-events: none; }

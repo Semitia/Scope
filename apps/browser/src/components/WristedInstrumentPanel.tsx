@@ -66,6 +66,7 @@ export default function WristedInstrumentPanel({ panel, channels, latest, channe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [poseKey, dimensionsKey, valid]);
   useEffect(() => { scene.current?.setAppearance(settings.appearance ?? 'lines'); }, [settings.appearance]);
+  useEffect(() => { scene.current?.setAxesVisible(settings.showAxes ?? true); }, [settings.showAxes]);
   const update = (patch: Partial<WristedSettings>) => {
     const wristed = { ...settings, ...patch };
     onChange({ wristed, channelKeys: [...new Set(wristed.bindings.filter(Boolean))] });
@@ -77,6 +78,9 @@ export default function WristedInstrumentPanel({ panel, channels, latest, channe
         {error ? '3D UNAVAILABLE' : !valid ? 'WAITING / INVALID INPUT' : paused && bound ? 'PAUSED' : bound ? `LIVE · ${bound}/7 BOUND` : 'MANUAL PREVIEW'}
       </span>
       <div>
+        <button type="button" aria-label="Show coordinate axes" aria-pressed={settings.showAxes ?? true}
+          title="Show or hide world and end-effector coordinate axes"
+          onClick={() => update({ showAxes: !(settings.showAxes ?? true) })}>坐标系</button>
         <button type="button" className="wristed-appearance" aria-label="Use instrument model" aria-pressed={settings.appearance === 'model'}
           title="Switch between line drawing and rigid model" onClick={() => update({ appearance: settings.appearance === 'model' ? 'lines' : 'model' })}>
           {settings.appearance === 'model' ? '模型' : '线条'}
@@ -91,7 +95,7 @@ export default function WristedInstrumentPanel({ panel, channels, latest, channe
       {modelStatus === 'loading' ? '模型加载中…' : '模型加载失败，暂时显示线条。重新打开面板可重试。'}
     </div>}
     {!valid && !error && <div className="wristed-warning">{unavailable.length ? `Waiting for ${unavailable.join(', ')}. Last valid pose retained.` : 'Input outside supported range. Last valid pose retained.'}</div>}
-    <div className="wristed-footer"><span>Drag to orbit · Ctrl+Scroll to zoom · Shift-drag / right-drag to pan</span><code>WRIST XYZ {tip.map(v => v.toFixed(2)).join(' / ')} mm</code><span><i className="axis-x">X</i> <i className="axis-y">Y</i> <i className="axis-z">Z</i></span></div>
+    <div className="wristed-footer"><span>Drag to freely rotate · Drag near edges to roll · Ctrl+Scroll to zoom · Shift-drag / right-drag to pan</span><code>WRIST XYZ {tip.map(v => v.toFixed(2)).join(' / ')} mm</code>{(settings.showAxes ?? true) && <span><i className="axis-x">X</i> <i className="axis-y">Y</i> <i className="axis-z">Z</i></span>}</div>
     {editing && <FloatingPanel className="wristed-settings" label={`Instrument settings for ${panel.title}`} width={440}
       anchor={() => panelAnchor(panel.id, '[data-instrument-settings-trigger]')} onClose={() => setEditing(false)}>
       <div className="wristed-settings-heading"><strong>Pose & channel bindings</strong><button type="button" aria-label="Close instrument settings" onClick={() => setEditing(false)}><X size={14} /></button></div>

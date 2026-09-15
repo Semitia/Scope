@@ -181,6 +181,7 @@ export function createWristedScene(host: HTMLDivElement, onModelStatus: (status:
     const radius = Math.max(15, box.getSize(new T.Vector3()).length() / 2);
     const halfFov = Math.min(T.MathUtils.degToRad(camera.fov / 2), Math.atan(Math.tan(T.MathUtils.degToRad(camera.fov / 2)) * camera.aspect));
     controls.target.copy(center);
+    camera.up.set(0, 0, 1);
     camera.position.copy(center).add(new T.Vector3(1.2, -1.8, 0.9).normalize().multiplyScalar(radius / Math.sin(halfFov) * 1.15));
     camera.lookAt(center); controls.update(); render();
   }
@@ -228,7 +229,11 @@ export function createWristedScene(host: HTMLDivElement, onModelStatus: (status:
     render();
     return positionOf(f.wrist2);
   }
-  return { update, fit, setAppearance(value: InstrumentAppearance) {
+  return { update, fit, setAxesVisible(visible: boolean) {
+    axes.visible = visible;
+    endFrame.visible = visible;
+    render();
+  }, setAppearance(value: InstrumentAppearance) {
     appearance = value; applyAppearance();
     if (initialized) fit();
   }, focusWrist: () => fit(true), dispose() {

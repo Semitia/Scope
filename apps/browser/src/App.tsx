@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { WaveformPlot } from './components/WaveformPlot';
 import { FloatingPanel, panelAnchor } from './components/FloatingPanel';
+import { PanelRecording } from './components/PanelRecording';
 import { IndicatorPanel } from './components/IndicatorPanel';
 import { DEFAULT_WRISTED, parseWristedSettings } from './wristed/config';
 import { ChannelGroupActions } from './components/ChannelGroupActions';
@@ -2097,6 +2098,7 @@ export default function App() {
                   )}
 
                   <div className="scope-panel-actions">
+                    <PanelRecording key={`${layoutKey}:${panel.id}`} title={panel.title} />
                     {!panelCollapsed && panel.type === 'scope' && (
                       <>
                         <label

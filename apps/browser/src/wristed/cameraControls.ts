@@ -1,10 +1,8 @@
-import { Matrix4, PerspectiveCamera, Quaternion, Spherical, Vector2, Vector3 } from 'three';
+import { Matrix4, PerspectiveCamera, Quaternion, Vector2, Vector3 } from 'three';
 
 /** Canvas-local orbit/pan/zoom: pointer capture keeps drags off document handlers. */
 export function createCameraControls(camera: PerspectiveCamera, canvas: HTMLCanvasElement, changed: () => void) {
   const target = new Vector3();
-  const upToY = new Quaternion().setFromUnitVectors(camera.up, new Vector3(0, 1, 0));
-  const yToUp = upToY.clone().invert();
   const pointers = new Map<number, Vector2>();
   let mode: 'orbit' | 'pan' | 'zoom' = 'orbit';
   const update = () => { camera.lookAt(target); camera.updateMatrixWorld(); changed(); };
@@ -19,6 +17,17 @@ export function createCameraControls(camera: PerspectiveCamera, canvas: HTMLCanv
     const offset = camera.position.clone().sub(target);
     offset.setLength(Math.min(50000, Math.max(2, offset.length() * Math.exp(Math.max(-2, Math.min(2, amount))))));
     camera.position.copy(target).add(offset);
+  };
+  // Project screen positions onto a virtual trackball in camera space. The
+  // hyperbolic rim keeps rotation smooth even when a captured drag leaves it.
+  const onTrackball = (point: Vector2) => {
+    const rect = canvas.getBoundingClientRect();
+    const radius = Math.max(Math.min(rect.width, rect.height) / 2, 1);
+    const x = (point.x - rect.left - rect.width / 2) / radius;
+    const y = (rect.top + rect.height / 2 - point.y) / radius;
+    const distance = Math.hypot(x, y);
+    const z = distance <= Math.SQRT1_2 ? Math.sqrt(1 - distance * distance) : 0.5 / distance;
+    return new Vector3(x, y, z).normalize().applyQuaternion(camera.quaternion);
   };
   const down = (event: PointerEvent) => {
     if (event.button < 0 || event.button > 2) return;
@@ -39,12 +48,10 @@ export function createCameraControls(camera: PerspectiveCamera, canvas: HTMLCanv
     } else if (mode === 'pan') pan(delta.x, delta.y);
     else if (mode === 'zoom') zoom(delta.y * 0.01);
     else {
-      const offset = camera.position.clone().sub(target).applyQuaternion(upToY);
-      const spherical = new Spherical().setFromVector3(offset);
-      spherical.theta -= delta.x * 2 * Math.PI / Math.max(canvas.clientHeight, 1);
-      spherical.phi -= delta.y * 2 * Math.PI / Math.max(canvas.clientHeight, 1);
-      spherical.makeSafe();
-      camera.position.copy(target).add(offset.setFromSpherical(spherical).applyQuaternion(yToUp));
+      const rotation = new Quaternion().setFromUnitVectors(onTrackball(next), onTrackball(previous));
+      const offset = camera.position.clone().sub(target).applyQuaternion(rotation);
+      camera.position.copy(target).add(offset);
+      camera.up.applyQuaternion(rotation).normalize();
     }
     pointers.set(event.pointerId, next); update();
   };

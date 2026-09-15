@@ -24,6 +24,7 @@ interface MaintainedRange extends NumericRange {
 interface RangeEdit {
   channelKey: string;
   edge: 'min' | 'max';
+  draft: string;
 }
 
 const INSTRUMENT_NUMBER_FORMAT = new Intl.NumberFormat('en-US', {
@@ -155,18 +156,26 @@ export function ValueBarPanel({
               <div className="value-bar-scale">
                 {editingRange?.channelKey === channel.key && editingRange.edge === 'min' ? (
                   <input
-                    type="number"
-                    value={channelRange?.mode === 'manual' ? channelRange.min : range.min}
+                    type="text"
+                    inputMode="decimal"
+                    value={editingRange.draft}
                     autoFocus
                     onFocus={(event) => event.currentTarget.select()}
-                    onChange={(event) => setChannelRange(channel.key, {
-                      mode: 'manual',
-                      min: Number(event.target.value),
-                      max: channelRange?.mode === 'manual' ? channelRange.max : range.max,
-                    })}
-                    onBlur={() => setEditingRange(null)}
+                    onChange={(event) => setEditingRange({ ...editingRange, draft: event.target.value })}
+                    onBlur={() => {
+                      const value = Number(editingRange.draft);
+                      if (editingRange.draft.trim() && Number.isFinite(value)) {
+                        setChannelRange(channel.key, {
+                          mode: 'manual',
+                          min: value,
+                          max: channelRange?.mode === 'manual' ? channelRange.max : range.max,
+                        });
+                      }
+                      setEditingRange(null);
+                    }}
                     onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur();
+                      if (event.key === 'Enter') event.currentTarget.blur();
+                      if (event.key === 'Escape') setEditingRange(null);
                     }}
                     aria-label={`Minimum for ${channel.label}`}
                   />
@@ -175,7 +184,7 @@ export function ValueBarPanel({
                     type="button"
                     onClick={() => {
                       setChannelRange(channel.key, { mode: 'manual', min: range.min, max: range.max });
-                      setEditingRange({ channelKey: channel.key, edge: 'min' });
+                      setEditingRange({ channelKey: channel.key, edge: 'min', draft: String(range.min) });
                     }}
                     aria-label={`Edit minimum for ${channel.label}`}
                     title="Click to set a manual minimum"
@@ -207,18 +216,26 @@ export function ValueBarPanel({
                 </button>
                 {editingRange?.channelKey === channel.key && editingRange.edge === 'max' ? (
                   <input
-                    type="number"
-                    value={channelRange?.mode === 'manual' ? channelRange.max : range.max}
+                    type="text"
+                    inputMode="decimal"
+                    value={editingRange.draft}
                     autoFocus
                     onFocus={(event) => event.currentTarget.select()}
-                    onChange={(event) => setChannelRange(channel.key, {
-                      mode: 'manual',
-                      min: channelRange?.mode === 'manual' ? channelRange.min : range.min,
-                      max: Number(event.target.value),
-                    })}
-                    onBlur={() => setEditingRange(null)}
+                    onChange={(event) => setEditingRange({ ...editingRange, draft: event.target.value })}
+                    onBlur={() => {
+                      const value = Number(editingRange.draft);
+                      if (editingRange.draft.trim() && Number.isFinite(value)) {
+                        setChannelRange(channel.key, {
+                          mode: 'manual',
+                          max: value,
+                          min: channelRange?.mode === 'manual' ? channelRange.min : range.min,
+                        });
+                      }
+                      setEditingRange(null);
+                    }}
                     onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur();
+                      if (event.key === 'Enter') event.currentTarget.blur();
+                      if (event.key === 'Escape') setEditingRange(null);
                     }}
                     aria-label={`Maximum for ${channel.label}`}
                   />
@@ -227,7 +244,7 @@ export function ValueBarPanel({
                     type="button"
                     onClick={() => {
                       setChannelRange(channel.key, { mode: 'manual', min: range.min, max: range.max });
-                      setEditingRange({ channelKey: channel.key, edge: 'max' });
+                      setEditingRange({ channelKey: channel.key, edge: 'max', draft: String(range.max) });
                     }}
                     aria-label={`Edit maximum for ${channel.label}`}
                     title="Click to set a manual maximum"

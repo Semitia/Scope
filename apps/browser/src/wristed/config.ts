@@ -12,6 +12,7 @@ export interface WristedDimensions {
 export type InstrumentAppearance = 'lines' | 'model';
 export interface WristedSettings {
   appearance: InstrumentAppearance;
+  showAxes: boolean;
   dimensions: WristedDimensions;
   psi: Psi;
   angle: number;
@@ -20,6 +21,7 @@ export interface WristedSettings {
 }
 export const DEFAULT_WRISTED: WristedSettings = {
   appearance: 'lines',
+  showAxes: true,
   dimensions: { segment: 100, link1: 42.4, link2: 8.89, zeta: 0.15,
     insertionOffset: 8, wristRotation: 1.3, radius: 4.2, jawLength: 9 },
   psi: [160, 0, 0.7, 0.3, 0.25, -0.2], angle: Math.PI / 6,
@@ -47,10 +49,11 @@ export function parseWristedSettings(raw: unknown, strict = false): WristedSetti
     && Array.isArray(v.bindings) && v.bindings.length === 7
     && v.bindings.every(x => typeof x === 'string' && x.length <= 1024)
     && (v.angleUnit === 'rad' || v.angleUnit === 'deg')
-    && (v.appearance === undefined || v.appearance === 'lines' || v.appearance === 'model');
+    && (v.appearance === undefined || v.appearance === 'lines' || v.appearance === 'model')
+    && (v.showAxes === undefined || typeof v.showAxes === 'boolean');
   if (!valid) {
     if (strict) throw new Error('Wristed instrument dimensions, pose, or bindings are invalid.');
     return fallback();
   }
-  return { ...structuredClone(v), appearance: v.appearance ?? 'lines' };
+  return { ...structuredClone(v), appearance: v.appearance ?? 'lines', showAxes: v.showAxes ?? true };
 }

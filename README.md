@@ -115,6 +115,7 @@ stay separate.
 
 ## Browser controls
 
+- record any panel from its header: select the current DebugScope tab in the browser sharing prompt, then stop to download a video of that panel, including text, colors, waveforms, and 3D graphics;
 - add waveform, Value Bars, and Indicators panels; each panel keeps independent channel bindings and configuration;
 - prepare and persist the workspace even before a producer connects, then inherit it for newly discovered programs;
 - export or import a portable Workspace JSON containing panel types, grid positions, channel bindings, signal colors/curves/patterns/widths/opacity, ranges, and indicator state colors;
@@ -149,6 +150,8 @@ WebSocket endpoint; UDP producers still send to that Hub's UDP address and port.
 Panels use a persistent 12-column desktop grid. Drag the grip in a panel header to move it, double-click its title to rename it, and use the lower-right handle to resize it; panels snap to the grid and push colliding panels downward. Narrow browser windows automatically switch to a readable single-column layout while preserving the saved desktop arrangement.
 
 Open **Settings → Workspace** to export the current program layout or offline template as a `.workspace.json` file. Importing a file replaces the current workspace after validating its schema, panel definitions, and channel styles; it does not change the telemetry protocol or require a connected producer.
+
+Panel recording requires desktop Chrome/Edge with Region Capture support and localhost or HTTPS. It records the visible panel region without audio; overlapping menus and other visible content inside that region appear in the video too. Keep the panel visible while recording. Moving or resizing it updates the captured region. Stopping browser sharing, removing the panel, or switching workspaces also finalizes the recording. Videos download as WebM (or MP4 when supported); at 256 MB a recording saves automatically. Finish recordings before closing or reloading the page. Region Capture follows the browser's [native region capture behavior](https://developer.chrome.com/docs/web-platform/region-capture/).
 
 Workspace exports include `channelStyles`, keyed by channel name so styles transfer across Hub addresses and program identities. Old version 1 files without this field remain importable and leave existing local styles unchanged. They cannot restore styles that were never exported.
 
